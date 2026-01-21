@@ -1,17 +1,55 @@
 {
-  "name": "repo-slice",
+  "name": "@better-vibe/repo-slice",
   "version": "0.1.0",
+  "description": "A deterministic CLI that extracts high-signal context bundles from repositories for AI-assisted coding workflows",
   "type": "module",
+  "license": "MIT",
+  "author": "Better Vibe",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/better-vibe/repo-slice.git"
+  },
+  "bugs": {
+    "url": "https://github.com/better-vibe/repo-slice/issues"
+  },
+  "homepage": "https://github.com/better-vibe/repo-slice#readme",
+  "keywords": [
+    "cli",
+    "context",
+    "ai",
+    "llm",
+    "code-analysis",
+    "monorepo",
+    "typescript",
+    "python"
+  ],
   "bin": {
     "repo-slice": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
   },
   "scripts": {
     "clean": "rm -rf dist",
     "typecheck": "tsc --noEmit",
-    "build": "bun run clean && bun build src/cli.ts --outdir dist --target node --minify --sourcemap=external",
-    "build:release": "bun run typecheck && bun run build",
+    "build": "bun build src/cli.ts --outdir dist --target node",
     "dev": "bun run src/cli.ts",
-    "test": "bun test"
+    "test": "bun test",
+    "test:unit": "bun test test/budget.test.ts test/output-md.test.ts test/output-json.test.ts test/workspaces.test.ts test/anchors-diff.test.ts test/anchors-log.test.ts",
+    "test:e2e": "bun test test/e2e.test.ts",
+    "changeset": "changeset",
+    "changeset:version": "changeset version",
+    "release": "bun run build && changeset publish",
+    "prepublishOnly": "bun run build"
   },
   "dependencies": {
     "fast-glob": "^3.3.3",
@@ -22,7 +60,9 @@
     "yaml": "^2.8.2"
   },
   "devDependencies": {
-    "@types/node": "^20.14.9",
-    "@types/bun": "1.3.6"
+    "@changesets/changelog-github": "^0.5.0",
+    "@changesets/cli": "^2.27.0",
+    "@types/bun": "^1.1.0",
+    "@types/node": "^20.14.9"
   }
 }

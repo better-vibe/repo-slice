@@ -15,18 +15,34 @@ A deterministic CLI that extracts high-signal context bundles from repositories 
 
 ## Installation
 
+### From npm (recommended)
+
+```bash
+npm install -g repo-slice
+bun install -g repo-slice
+# or
+npx repo-slice pack --entry src/index.ts
+bunx repo-slice pack --entry src/index.ts
+```
+
+### From source
+
 ```bash
 # Clone and install
-git clone <repository-url>
+git clone https://github.com/your-org/repo-slice.git
 cd repo-slice
-npm install
+bun install
 
 # Build
-npm run build
+bun run build
 
-# Or run directly with bun
+# Run directly with bun (development)
 bun run src/cli.ts
 ```
+
+**Requirements:**
+- Node.js >= 18 (Node.js 20 LTS recommended)
+- Bun (for development)
 
 ## Quick Start
 
