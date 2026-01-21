@@ -1,0 +1,33 @@
+{
+  "meta": {
+    "repoRoot": "/repo",
+    "command": "repo-slice pack --entry packages/web/src/index.ts --format json",
+    "scope": {
+      "mode": "nearest",
+      "workspaces": [
+        "packages/web"
+      ]
+    },
+    "budget": {
+      "chars": 100,
+      "usedChars": 25
+    }
+  },
+  "items": [
+    {
+      "kind": "snippet",
+      "lang": "ts",
+      "workspaceRoot": "packages/web",
+      "filePath": "packages/web/src/index.ts",
+      "range": {
+        "startLine": 1,
+        "endLine": 1
+      },
+      "reasons": [
+        "entry file"
+      ],
+      "content": "export const value = 1;"
+    }
+  ],
+  "omitted": []
+}

@@ -1,0 +1,41 @@
+{
+  "meta": {
+    "repoRoot": "/repo",
+    "command": "repo-slice pack --entry src/app.ts --budget-chars 50 --format json",
+    "scope": {
+      "mode": "nearest",
+      "workspaces": [
+        "root"
+      ]
+    },
+    "budget": {
+      "chars": 50,
+      "usedChars": 25
+    }
+  },
+  "items": [
+    {
+      "kind": "snippet",
+      "lang": "ts",
+      "workspaceRoot": ".",
+      "filePath": "src/app.ts",
+      "range": {
+        "startLine": 1,
+        "endLine": 1
+      },
+      "reasons": [
+        "entry file"
+      ],
+      "content": "export function main() {}"
+    }
+  ],
+  "omitted": [
+    {
+      "filePath": "src/utils.ts",
+      "kind": "file",
+      "reason": "exceeds budget",
+      "score": 500,
+      "estimatedChars": 1000
+    }
+  ]
+}
