@@ -4,7 +4,8 @@ import fg from "fast-glob";
 import { fileExists } from "../../utils/fs.js";
 import { extractSnippet } from "../../utils/snippet.js";
 import { isPathInside, normalizePath } from "../../utils/path.js";
-import type { AdapterIndex, ImportGraph, Range, SymbolLocation } from "../types.js";
+import type { AdapterIndex, CallExpression, ImportGraph, Range, SymbolLocation } from "../types.js";
+import { findTsCallExpressions } from "./calls.js";
 import type { Workspace } from "../../workspaces/types.js";
 import type { IgnoreMatcher } from "../../ignore.js";
 
@@ -39,6 +40,8 @@ export async function buildTsAdapter(options: {
     findSymbolReferences: (definition, refOptions) =>
       findTsReferences(languageService, definition, refOptions),
     extractSnippet: (filePath, range) => extractSnippet(filePath, range),
+    findCallExpressions: (callOptions) =>
+      findTsCallExpressions(program, workspace.root, callOptions),
   };
 }
 
