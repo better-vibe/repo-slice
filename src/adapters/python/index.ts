@@ -7,11 +7,13 @@ import { extractSnippet } from "../../utils/snippet.js";
 import { isPathInside, normalizePath, toPosixPath } from "../../utils/path.js";
 import type {
   AdapterIndex,
+  CallExpression,
   ImportGraph,
   PythonDefinition,
   Range,
   SymbolLocation,
 } from "../types.js";
+import { findPythonCallExpressions } from "./calls.js";
 import type { Workspace } from "../../workspaces/types.js";
 import type { IgnoreMatcher } from "../../ignore.js";
 
@@ -60,6 +62,16 @@ export async function buildPythonAdapter(options: {
     findSymbolReferences: (definition, refOptions) =>
       findPythonReferences(index, definition, refOptions),
     extractSnippet: (filePath, range) => extractSnippet(filePath, range),
+    findCallExpressions: (callOptions) =>
+      findPythonCallExpressions(
+        {
+          workspaceRoot: workspace.root,
+          fileContents: index.fileContents,
+          definitions: index.definitions,
+          moduleMap: index.moduleMap,
+        },
+        callOptions
+      ),
     metadata: {
       py: {
         moduleMap: index.moduleMap,

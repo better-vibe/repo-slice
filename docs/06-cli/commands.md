@@ -7,6 +7,7 @@
 | Command | Description |
 |---------|-------------|
 | `repo-slice pack` | Generate a context bundle |
+| `repo-slice graph` | Generate dependency graphs |
 | `repo-slice workspaces` | List detected workspaces |
 | `repo-slice version` | Print CLI version |
 | `repo-slice help` | Show help information |
@@ -20,6 +21,23 @@ repo-slice pack --entry src/index.ts
 ```
 
 See [Options](./options.md) for all available flags.
+
+## graph
+
+Generate dependency graphs from anchors. Supports import graphs, call graphs, or combined graphs. Output can be JSON (for tooling) or DOT (for visualization with Graphviz).
+
+```bash
+# Import graph from entry file
+repo-slice graph --entry src/index.ts
+
+# Call graph with DOT output
+repo-slice graph --entry src/index.ts --graph-type calls --format dot
+
+# Combined graph to file
+repo-slice graph --symbol UserService --graph-type combined --out deps.json
+```
+
+See [Options](./options.md) for graph-specific flags and [Examples](./examples.md) for more usage patterns.
 
 ## workspaces
 

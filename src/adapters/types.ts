@@ -33,6 +33,15 @@ export interface SymbolLocation {
 
 export type ImportGraph = Map<string, Set<string>>;
 
+export interface CallExpression {
+  callerFile: string;
+  callerSymbol?: string;
+  calleeSymbol: string;
+  range: Range;
+  confidence: number;
+  isDynamic: boolean;
+}
+
 export interface AdapterMetadata {
   py?: {
     moduleMap: Map<string, string>;
@@ -51,5 +60,9 @@ export interface AdapterIndex {
     options?: { limit?: number; anchorFiles?: string[] }
   ) => Promise<SymbolLocation[]>;
   extractSnippet: (filePath: string, range: Range) => Promise<string>;
+  findCallExpressions?: (options?: {
+    files?: string[];
+    symbolFilter?: string[];
+  }) => CallExpression[];
   metadata?: AdapterMetadata;
 }
