@@ -1,8 +1,4 @@
 #!/usr/bin/env node
-import { packCommand } from "./commands/pack.js";
-import { graphCommand } from "./commands/graph.js";
-import { workspacesCommand } from "./commands/workspaces.js";
-import { versionCommand } from "./commands/version.js";
 import { renderHelp } from "./commands/help.js";
 
 const args = process.argv.slice(2);
@@ -18,16 +14,16 @@ async function main(): Promise<void> {
 
   switch (command) {
     case "pack":
-      await packCommand(rest);
+      await (await import("./commands/pack.js")).packCommand(rest);
       return;
     case "graph":
-      await graphCommand(rest);
+      await (await import("./commands/graph.js")).graphCommand(rest);
       return;
     case "workspaces":
-      await workspacesCommand(rest);
+      await (await import("./commands/workspaces.js")).workspacesCommand(rest);
       return;
     case "version":
-      await versionCommand();
+      await (await import("./commands/version.js")).versionCommand();
       return;
     default:
       process.stderr.write(`Unknown command: ${command}\n`);
