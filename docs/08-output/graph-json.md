@@ -104,7 +104,8 @@ repo-slice graph --entry src/index.ts --format json --out graph.json
 
 | Type | Description |
 |------|-------------|
-| `imports` | Module import relationship |
+| `imports` | Static module import relationship |
+| `imports-dynamic` | Dynamic import (`import()`, `require()`, `importlib.import_module()`) |
 | `tests` | Test file imports subject under test |
 | `calls` | Direct function/method call |
 | `calls-dynamic` | Dynamic/computed call (lower confidence) |

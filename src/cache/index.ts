@@ -2,8 +2,8 @@ import { join } from "node:path";
 import { readFile, writeFile, mkdir, stat } from "node:fs/promises";
 import { fileExists } from "../utils/fs.js";
 import { sha1 } from "../utils/hash.js";
-import type { FileStat, WorkspaceCache } from "./types.js";
-import type { ImportGraph } from "../adapters/types.js";
+import type { FileStat, SerializedImportGraph, LegacySerializedImportGraph, WorkspaceCache } from "./types.js";
+import type { ImportGraph, ImportEdgeType } from "../adapters/types.js";
 
 export async function loadWorkspaceCache(options: {
   repoRoot: string;
@@ -61,18 +61,41 @@ export function isCacheValid(cache: WorkspaceCache, fileStats: FileStat[]): bool
   return true;
 }
 
-export function serializeImportGraph(graph: ImportGraph): Record<string, string[]> {
-  const record: Record<string, string[]> = {};
-  for (const [key, value] of graph.entries()) {
-    record[key] = Array.from(value).sort();
+export function serializeImportGraph(graph: ImportGraph): SerializedImportGraph {
+  const record: SerializedImportGraph = {};
+  for (const [source, targets] of graph.entries()) {
+    const targetRecord: Record<string, ImportEdgeType> = {};
+    // Sort keys for deterministic output
+    const sortedTargets = Array.from(targets.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+    for (const [target, edgeType] of sortedTargets) {
+      targetRecord[target] = edgeType;
+    }
+    record[source] = targetRecord;
   }
   return record;
 }
 
-export function deserializeImportGraph(record: Record<string, string[]>): ImportGraph {
+/**
+ * Deserialize import graph with backward compatibility for legacy format.
+ * Legacy format: Record<string, string[]> (all edges treated as "imports")
+ * New format: Record<string, Record<string, ImportEdgeType>>
+ */
+export function deserializeImportGraph(record: SerializedImportGraph | LegacySerializedImportGraph): ImportGraph {
   const graph: ImportGraph = new Map();
-  for (const [key, value] of Object.entries(record)) {
-    graph.set(key, new Set(value));
+  for (const [source, targets] of Object.entries(record)) {
+    const targetMap = new Map<string, ImportEdgeType>();
+    if (Array.isArray(targets)) {
+      // Legacy format: string[] - treat all as static imports
+      for (const target of targets) {
+        targetMap.set(target, "imports");
+      }
+    } else {
+      // New format: Record<string, ImportEdgeType>
+      for (const [target, edgeType] of Object.entries(targets)) {
+        targetMap.set(target, edgeType as ImportEdgeType);
+      }
+    }
+    graph.set(source, targetMap);
   }
   return graph;
 }

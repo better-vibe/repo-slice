@@ -50,6 +50,7 @@ digraph G {
 | Edge Type | Style |
 |-----------|-------|
 | `imports` | Solid line (default) |
+| `imports-dynamic` | Dashed line |
 | `calls` | Blue color |
 | `tests` | Green color, labeled "tests" |
 | `calls-dynamic` | Dashed line |

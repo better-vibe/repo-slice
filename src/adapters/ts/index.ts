@@ -4,7 +4,7 @@ import fg from "fast-glob";
 import { fileExists } from "../../utils/fs.js";
 import { extractSnippet } from "../../utils/snippet.js";
 import { isPathInside, normalizePath } from "../../utils/path.js";
-import type { AdapterIndex, CallExpression, ImportGraph, Range, SymbolLocation } from "../types.js";
+import type { AdapterIndex, CallExpression, ImportEdgeType, ImportGraph, Range, SymbolLocation } from "../types.js";
 import { findTsCallExpressions } from "./calls.js";
 import type { Workspace } from "../../workspaces/types.js";
 import type { IgnoreMatcher } from "../../ignore.js";
@@ -142,26 +142,135 @@ function buildImportGraph(
   const host = ts.createCompilerHost(compilerOptions, true);
   const fileSet = new Set(program.getSourceFiles().map((file) => file.fileName));
 
+  /**
+   * Add an import edge, preferring "imports" (static) over "imports-dynamic" if both exist.
+   */
+  const addEdge = (from: string, to: string, edgeType: ImportEdgeType): void => {
+    let targets = graph.get(from);
+    if (!targets) {
+      targets = new Map();
+      graph.set(from, targets);
+    }
+    const existing = targets.get(to);
+    // Prefer "imports" (static) over "imports-dynamic"
+    if (!existing || (existing === "imports-dynamic" && edgeType === "imports")) {
+      targets.set(to, edgeType);
+    }
+  };
+
+  /**
+   * Resolve a module specifier to an absolute file path.
+   */
+  const resolveModule = (moduleName: string, containingFile: string): string | undefined => {
+    const resolved =
+      ts.resolveModuleName(moduleName, containingFile, compilerOptions, host)
+        .resolvedModule?.resolvedFileName ?? resolveModuleFallback(containingFile, moduleName);
+    if (!resolved) return undefined;
+    const resolvedPath = normalizePath(resolved);
+    if (!isPathInside(resolvedPath, workspaceRoot)) return undefined;
+    if (!fileSet.has(resolvedPath) && !fileExistsSync(resolvedPath)) return undefined;
+    return resolvedPath;
+  };
+
+  /**
+   * Extract a string literal from a node (supports string literals and no-substitution template literals).
+   */
+  const extractStringLiteral = (node: ts.Node): string | undefined => {
+    if (ts.isStringLiteral(node)) {
+      return node.text;
+    }
+    if (ts.isNoSubstitutionTemplateLiteral(node)) {
+      return node.text;
+    }
+    return undefined;
+  };
+
   for (const sourceFile of program.getSourceFiles()) {
     const filePath = normalizePath(sourceFile.fileName);
     if (!isPathInside(filePath, workspaceRoot)) continue;
-    if (!graph.has(filePath)) graph.set(filePath, new Set());
+    if (!graph.has(filePath)) graph.set(filePath, new Map());
 
-    sourceFile.forEachChild((node) => {
+    const visit = (node: ts.Node): void => {
+      // Static import/export declarations
       if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
         const moduleSpecifier = node.moduleSpecifier;
-        if (!moduleSpecifier || !ts.isStringLiteral(moduleSpecifier)) return;
-        const moduleName = moduleSpecifier.text;
-        const resolved =
-          ts.resolveModuleName(moduleName, filePath, compilerOptions, host)
-            .resolvedModule?.resolvedFileName ?? resolveModuleFallback(filePath, moduleName);
-        if (!resolved) return;
-        const resolvedPath = normalizePath(resolved);
-        if (!isPathInside(resolvedPath, workspaceRoot)) return;
-        if (!fileSet.has(resolvedPath) && !fileExistsSync(resolvedPath)) return;
-        graph.get(filePath)?.add(resolvedPath);
+        if (moduleSpecifier) {
+          const moduleName = extractStringLiteral(moduleSpecifier);
+          if (moduleName) {
+            const resolved = resolveModule(moduleName, filePath);
+            if (resolved) {
+              addEdge(filePath, resolved, "imports");
+            }
+          }
+        }
       }
-    });
+
+      // import = require("...") - ImportEqualsDeclaration
+      if (ts.isImportEqualsDeclaration(node)) {
+        const moduleRef = node.moduleReference;
+        if (ts.isExternalModuleReference(moduleRef) && moduleRef.expression) {
+          const moduleName = extractStringLiteral(moduleRef.expression);
+          if (moduleName) {
+            const resolved = resolveModule(moduleName, filePath);
+            if (resolved) {
+              addEdge(filePath, resolved, "imports-dynamic");
+            }
+          }
+        }
+      }
+
+      // Dynamic import() calls and require() calls
+      if (ts.isCallExpression(node)) {
+        const expr = node.expression;
+
+        // Dynamic import(): import("...")
+        if (expr.kind === ts.SyntaxKind.ImportKeyword) {
+          const arg = node.arguments[0];
+          if (arg) {
+            const moduleName = extractStringLiteral(arg);
+            if (moduleName) {
+              const resolved = resolveModule(moduleName, filePath);
+              if (resolved) {
+                addEdge(filePath, resolved, "imports-dynamic");
+              }
+            }
+          }
+        }
+
+        // require("...")
+        if (ts.isIdentifier(expr) && expr.text === "require") {
+          const arg = node.arguments[0];
+          if (arg) {
+            const moduleName = extractStringLiteral(arg);
+            if (moduleName) {
+              const resolved = resolveModule(moduleName, filePath);
+              if (resolved) {
+                addEdge(filePath, resolved, "imports-dynamic");
+              }
+            }
+          }
+        }
+      }
+
+      // import("...") type references in type nodes
+      if (ts.isImportTypeNode(node)) {
+        const arg = node.argument;
+        if (ts.isLiteralTypeNode(arg) && arg.literal) {
+          const moduleName = extractStringLiteral(arg.literal);
+          if (moduleName) {
+            const resolved = resolveModule(moduleName, filePath);
+            if (resolved) {
+              // Type-only import references are treated as static imports
+              addEdge(filePath, resolved, "imports");
+            }
+          }
+        }
+      }
+
+      ts.forEachChild(node, visit);
+    };
+
+    visit(sourceFile);
   }
 
   return graph;

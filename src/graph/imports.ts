@@ -1,5 +1,5 @@
-import type { AdapterIndex } from "../adapters/types.js";
-import type { GraphNode, GraphEdge, IncludeTestsMode } from "./types.js";
+import type { AdapterIndex, ImportEdgeType } from "../adapters/types.js";
+import type { GraphNode, GraphEdge, IncludeTestsMode, EdgeType } from "./types.js";
 import { languageFromPath } from "../utils/lang.js";
 import { toPosixPath } from "../utils/path.js";
 import { relative, basename, extname, dirname, join } from "node:path";
@@ -63,8 +63,11 @@ export async function buildImportGraph(
       const neighbors = graph.get(current.file);
       if (!neighbors) continue;
 
-      const sortedNeighbors = Array.from(neighbors).sort();
-      for (const neighbor of sortedNeighbors) {
+      // Sort neighbor entries by target file for determinism
+      const sortedNeighbors = Array.from(neighbors.entries()).sort((a, b) =>
+        a[0].localeCompare(b[0])
+      );
+      for (const [neighbor, importEdgeType] of sortedNeighbors) {
         const fromId = createNodeId(current.file, options.repoRoot);
         const toId = createNodeId(neighbor, options.repoRoot);
 
@@ -90,11 +93,15 @@ export async function buildImportGraph(
         const fromNode = nodes.get(fromId);
         const toNode = nodes.get(toId);
         if (fromNode && toNode) {
+          // Map adapter edge type to graph edge type
+          const graphEdgeType: EdgeType = importEdgeType === "imports-dynamic" 
+            ? "imports-dynamic" 
+            : "imports";
           edges.push({
             from: fromId,
             to: toId,
-            type: "imports",
-            confidence: 1.0,
+            type: graphEdgeType,
+            confidence: importEdgeType === "imports-dynamic" ? 0.9 : 1.0,
           });
         }
       }

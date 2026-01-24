@@ -1,4 +1,4 @@
-import type { Range } from "../adapters/types.js";
+import type { ImportEdgeType, Range } from "../adapters/types.js";
 
 export interface FileStat {
   path: string;
@@ -14,17 +14,29 @@ export interface PythonDefinitionCache {
   classRange?: Range;
 }
 
+/**
+ * Serialized import graph format.
+ * Maps source file -> (target file -> edge type).
+ * Legacy format (string[]) is accepted for backward compatibility during deserialization.
+ */
+export type SerializedImportGraph = Record<string, Record<string, ImportEdgeType>>;
+
+/**
+ * Legacy format for backward compatibility.
+ */
+export type LegacySerializedImportGraph = Record<string, string[]>;
+
 export interface WorkspaceCache {
   version: string;
   workspaceRoot: string;
   configHash: string;
   files: FileStat[];
   ts?: {
-    importGraph: Record<string, string[]>;
+    importGraph: SerializedImportGraph | LegacySerializedImportGraph;
   };
   py?: {
     moduleMap: Record<string, string>;
     definitions: Record<string, PythonDefinitionCache[]>;
-    importGraph: Record<string, string[]>;
+    importGraph: SerializedImportGraph | LegacySerializedImportGraph;
   };
 }

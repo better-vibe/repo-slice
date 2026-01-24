@@ -4,7 +4,7 @@ export type GraphType = "imports" | "calls" | "combined";
 export type CollapseMode = "none" | "external" | "file" | "class";
 export type GraphOutputFormat = "json" | "dot";
 export type NodeKind = "file" | "module" | "function" | "method" | "constructor" | "class";
-export type EdgeType = "imports" | "tests" | "calls" | "calls-dynamic" | "calls-unknown";
+export type EdgeType = "imports" | "imports-dynamic" | "tests" | "calls" | "calls-dynamic" | "calls-unknown";
 
 export interface GraphRange {
   startLine: number;

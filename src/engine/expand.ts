@@ -50,12 +50,15 @@ export async function expandFromAnchors(options: {
       if (nextDistance > options.depth) continue;
       const neighbors = graph.get(current.file);
       if (!neighbors) continue;
-      const sortedNeighbors = Array.from(neighbors).sort();
+      // Sort by file path for determinism (neighbors is Map<string, ImportEdgeType>)
+      const sortedNeighbors = Array.from(neighbors.keys()).sort();
       for (const neighbor of sortedNeighbors) {
         if (visited.has(neighbor)) continue;
         visited.add(neighbor);
         queue.push({ file: neighbor, distance: nextDistance });
         const estimatedChars = await estimateFileChars(neighbor);
+        const edgeType = neighbors.get(neighbor);
+        const isDynamic = edgeType === "imports-dynamic";
         candidates.push({
           id: "",
           kind: "file",
@@ -64,7 +67,7 @@ export async function expandFromAnchors(options: {
           workspaceRoot: adapter.workspace.root,
           filePath: neighbor,
           score: DISTANCE_SCORES[nextDistance] ?? DEFAULT_DISTANCE_SCORE,
-          reasons: [`import-distance ${nextDistance}`],
+          reasons: [isDynamic ? `dynamic-import-distance ${nextDistance}` : `import-distance ${nextDistance}`],
           estimatedChars,
         });
       }

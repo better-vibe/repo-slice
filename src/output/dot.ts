@@ -75,7 +75,8 @@ function renderNode(node: GraphNode): string {
 function renderEdge(edge: GraphEdge): string {
   const attrs: string[] = [];
 
-  if (edge.type === "calls-dynamic" || edge.type === "calls-unknown") {
+  // Dynamic imports and calls get dashed lines
+  if (edge.type === "imports-dynamic" || edge.type === "calls-dynamic" || edge.type === "calls-unknown") {
     attrs.push('style="dashed"');
   }
   if (edge.type === "tests") {
@@ -85,7 +86,8 @@ function renderEdge(edge: GraphEdge): string {
   if (edge.type === "calls") {
     attrs.push('color="blue"');
   }
-  if (edge.confidence < 0.8) {
+  // Low confidence edges get dotted lines (only if not already styled)
+  if (edge.confidence < 0.8 && !attrs.some(a => a.includes("style"))) {
     attrs.push('style="dotted"');
   }
 
