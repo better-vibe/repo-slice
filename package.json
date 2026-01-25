@@ -1,6 +1,6 @@
 {
   "name": "@better-vibe/repo-slice",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A deterministic CLI that extracts high-signal context bundles from repositories for AI-assisted coding workflows",
   "type": "module",
   "license": "MIT",
