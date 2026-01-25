@@ -31,7 +31,13 @@ export interface SymbolLocation {
   symbolName?: string;
 }
 
-export type ImportGraph = Map<string, Set<string>>;
+export type ImportEdgeType = "imports" | "imports-dynamic";
+
+/**
+ * Import graph maps source file -> (target file -> edge type).
+ * Edge type is "imports" for static imports, "imports-dynamic" for dynamic imports.
+ */
+export type ImportGraph = Map<string, Map<string, ImportEdgeType>>;
 
 export interface CallExpression {
   callerFile: string;

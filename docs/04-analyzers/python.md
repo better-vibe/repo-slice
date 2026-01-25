@@ -11,6 +11,19 @@ The Python adapter provides indexing and symbol resolution for Python files usin
 - Uses tree-sitter for parsing and AST traversal
 - Builds a module map from `pythonImportRoots` (default: `src`, `.`)
 
+### Import Graph Detection
+
+The adapter detects both static and dynamic imports:
+
+| Import Form | Edge Type | Example |
+|-------------|-----------|---------|
+| `import module` | `imports` | Static import |
+| `from module import x` | `imports` | Static from-import |
+| `importlib.import_module("...")` | `imports-dynamic` | Dynamic importlib import |
+| `__import__("...")` | `imports-dynamic` | Built-in dynamic import |
+
+Dynamic imports are only detected when the module name is a string literal. Variable module names (e.g., `importlib.import_module(name)`) are not tracked.
+
 ## Symbol Query Formats
 
 | Format | Example | Description |

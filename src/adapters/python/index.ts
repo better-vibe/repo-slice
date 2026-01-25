@@ -8,6 +8,7 @@ import { isPathInside, normalizePath, toPosixPath } from "../../utils/path.js";
 import type {
   AdapterIndex,
   CallExpression,
+  ImportEdgeType,
   ImportGraph,
   PythonDefinition,
   Range,
@@ -279,22 +280,91 @@ function buildPythonImportGraph(
   moduleMap: Map<string, string>
 ): ImportGraph {
   const graph: ImportGraph = new Map();
+
+  /**
+   * Add an import edge, preferring "imports" (static) over "imports-dynamic" if both exist.
+   */
+  const addEdge = (from: string, to: string, edgeType: ImportEdgeType): void => {
+    let targets = graph.get(from);
+    if (!targets) {
+      targets = new Map();
+      graph.set(from, targets);
+    }
+    const existing = targets.get(to);
+    // Prefer "imports" (static) over "imports-dynamic"
+    if (!existing || (existing === "imports-dynamic" && edgeType === "imports")) {
+      targets.set(to, edgeType);
+    }
+  };
+
   for (const file of files) {
-    graph.set(file, new Set());
+    if (!graph.has(file)) graph.set(file, new Map());
     const text = fileContents.get(file) ?? "";
     const tree = parser.parse(text);
+    const currentModule = fileModules.get(file);
+
+    // Static imports: import_statement and import_from_statement
     const importNodes = tree.rootNode.descendantsOfType([
       "import_statement",
       "import_from_statement",
     ]);
-    const currentModule = fileModules.get(file);
     for (const node of importNodes) {
       const modules = extractImportedModules(node, currentModule);
       for (const mod of modules) {
         const resolved = resolveModuleToFile(mod, moduleMap);
         if (!resolved) continue;
         if (!isPathInside(resolved, workspace.root)) continue;
-        graph.get(file)?.add(resolved);
+        addEdge(file, resolved, "imports");
+      }
+    }
+
+    // Dynamic imports: importlib.import_module("...") and __import__("...")
+    const callNodes = tree.rootNode.descendantsOfType(["call"]);
+    for (const callNode of callNodes) {
+      const functionNode = callNode.childForFieldName("function");
+      if (!functionNode) continue;
+
+      let isDynamicImport = false;
+      let moduleArg: Parser.SyntaxNode | null = null;
+
+      // Check for importlib.import_module("...")
+      if (functionNode.type === "attribute") {
+        const objectNode = functionNode.childForFieldName("object");
+        const attrNode = functionNode.childForFieldName("attribute");
+        if (
+          objectNode?.type === "identifier" &&
+          objectNode.text === "importlib" &&
+          attrNode?.text === "import_module"
+        ) {
+          isDynamicImport = true;
+          const argsNode = callNode.childForFieldName("arguments");
+          if (argsNode && argsNode.namedChildren.length > 0) {
+            moduleArg = argsNode.namedChildren[0];
+          }
+        }
+      }
+
+      // Check for __import__("...")
+      if (functionNode.type === "identifier" && functionNode.text === "__import__") {
+        isDynamicImport = true;
+        const argsNode = callNode.childForFieldName("arguments");
+        if (argsNode && argsNode.namedChildren.length > 0) {
+          moduleArg = argsNode.namedChildren[0];
+        }
+      }
+
+      if (isDynamicImport && moduleArg && moduleArg.type === "string") {
+        // Extract the string content (remove quotes)
+        const stringContent = moduleArg.text;
+        // Parse string literal - handle various quote styles
+        const match = stringContent.match(/^["'](.+)["']$/);
+        if (match) {
+          const moduleName = match[1];
+          const resolved = resolveModuleToFile(moduleName, moduleMap);
+          if (resolved && isPathInside(resolved, workspace.root)) {
+            addEdge(file, resolved, "imports-dynamic");
+          }
+        }
       }
     }
   }

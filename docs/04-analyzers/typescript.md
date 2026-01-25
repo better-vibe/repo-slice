@@ -12,6 +12,21 @@ The TypeScript adapter provides indexing and symbol resolution for TypeScript an
 - Loads `tsconfig.json` (or `tsconfig.base.json`) when present
 - Builds an import graph from `import`/`export` declarations
 
+### Import Graph Detection
+
+The adapter detects both static and dynamic imports:
+
+| Import Form | Edge Type | Example |
+|-------------|-----------|---------|
+| `import x from "..."` | `imports` | Static ES module import |
+| `export * from "..."` | `imports` | Static re-export |
+| `import("...")` | `imports-dynamic` | Dynamic import expression |
+| `require("...")` | `imports-dynamic` | CommonJS require call |
+| `import x = require("...")` | `imports-dynamic` | TypeScript import-equals |
+| `import("...").Type` | `imports` | Import type reference |
+
+Dynamic imports are only detected when the module specifier is a string literal or no-substitution template literal. Variable specifiers (e.g., `import(moduleName)`) are not tracked.
+
 ## Symbol Query Formats
 
 | Format | Example | Description |

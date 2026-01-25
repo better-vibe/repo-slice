@@ -482,3 +482,80 @@ describe("e2e: graph command - validation", () => {
     expect(result.stderr).toContain("Cannot combine");
   });
 });
+
+describe("e2e: graph command - dynamic imports", () => {
+  test("detects dynamic imports as imports-dynamic edges", async () => {
+    // src/cli.ts uses dynamic imports: await import("./commands/pack.js")
+    const result = await runCli([
+      "graph",
+      "--entry", "src/cli.ts",
+      "--depth", "1",
+      "--format", "json",
+      "--no-timestamp",
+      "--collapse", "none",
+    ]);
+    expect(result.exitCode).toBe(0);
+    const json = JSON.parse(result.stdout);
+    
+    // Find edges from cli.ts
+    const cliNodeId = json.nodes.find((n: any) => n.filePath.endsWith("cli.ts"))?.id;
+    expect(cliNodeId).toBeDefined();
+    
+    // Check for imports-dynamic edges to dynamically imported commands
+    const dynamicEdges = json.edges.filter((e: any) => 
+      e.from === cliNodeId && e.type === "imports-dynamic"
+    );
+    
+    // cli.ts has dynamic imports to pack.ts, graph.ts, workspaces.ts, version.ts
+    expect(dynamicEdges.length).toBeGreaterThanOrEqual(4);
+    
+    // Verify at least one points to commands/pack
+    const packEdge = dynamicEdges.find((e: any) => 
+      e.to.includes("commands/pack")
+    );
+    expect(packEdge).toBeDefined();
+    expect(packEdge.type).toBe("imports-dynamic");
+    // Dynamic imports have slightly lower confidence
+    expect(packEdge.confidence).toBeLessThan(1.0);
+  });
+
+  test("static imports have higher precedence than dynamic", async () => {
+    // src/cli.ts has a static import of renderHelp from help.js
+    const result = await runCli([
+      "graph",
+      "--entry", "src/cli.ts",
+      "--depth", "1",
+      "--format", "json",
+      "--no-timestamp",
+      "--collapse", "none",
+    ]);
+    expect(result.exitCode).toBe(0);
+    const json = JSON.parse(result.stdout);
+    
+    // Find edge from cli.ts to help.ts (static import)
+    const cliNodeId = json.nodes.find((n: any) => n.filePath.endsWith("cli.ts"))?.id;
+    const helpEdge = json.edges.find((e: any) => 
+      e.from === cliNodeId && e.to.includes("commands/help")
+    );
+    
+    // help.ts is imported statically, so should be "imports" not "imports-dynamic"
+    expect(helpEdge).toBeDefined();
+    expect(helpEdge.type).toBe("imports");
+    expect(helpEdge.confidence).toBe(1.0);
+  });
+
+  test("DOT output shows dynamic imports with dashed lines", async () => {
+    const result = await runCli([
+      "graph",
+      "--entry", "src/cli.ts",
+      "--depth", "1",
+      "--format", "dot",
+      "--no-timestamp",
+      "--collapse", "none",
+    ]);
+    expect(result.exitCode).toBe(0);
+    
+    // DOT output should contain dashed style for dynamic imports
+    expect(result.stdout).toContain('style="dashed"');
+  });
+});
