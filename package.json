@@ -49,6 +49,7 @@
     "changeset": "changeset",
     "changeset:version": "changeset version",
     "release": "bun run build && changeset publish",
+    "release:add": "changeset add --open",
     "prepublishOnly": "bun run build"
   },
   "dependencies": {
