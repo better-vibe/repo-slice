@@ -12,6 +12,11 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
+  if (command === "--version" || command === "-v") {
+    await (await import("./commands/version.js")).versionCommand();
+    return;
+  }
+
   switch (command) {
     case "pack":
       await (await import("./commands/pack.js")).packCommand(rest);
