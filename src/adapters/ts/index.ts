@@ -36,12 +36,12 @@ export async function buildTsAdapter(options: {
     files: tsFiles,
     importGraph,
     findSymbolDefinitions: (query) =>
-      findTsDefinitions(program, compilerOptions, workspace.root, query),
+      Promise.resolve(findTsDefinitions(program, compilerOptions, workspace.root, query)),
     findSymbolReferences: (definition, refOptions) =>
       findTsReferences(languageService, definition, refOptions),
     extractSnippet: (filePath, range) => extractSnippet(filePath, range),
-    findCallExpressions: (callOptions) =>
-      findTsCallExpressions(program, workspace.root, callOptions),
+    findCallExpressions: async (callOptions) =>
+      Promise.resolve(findTsCallExpressions(program, workspace.root, callOptions)),
   };
 }
 

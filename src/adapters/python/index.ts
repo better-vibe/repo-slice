@@ -28,10 +28,6 @@ export interface PythonIndex {
   importGraph: ImportGraph;
 }
 
-
-const parser = new Parser();
-parser.setLanguage(Python);
-
 export async function buildPythonAdapter(options: {
   workspace: Workspace;
   ignoreMatcher: IgnoreMatcher;
@@ -60,10 +56,14 @@ export async function buildPythonAdapter(options: {
     files: index.files,
     importGraph: index.importGraph,
     findSymbolDefinitions: (query) => Promise.resolve(findPythonDefinitions(index, query)),
-    findSymbolReferences: (definition, refOptions) =>
-      findPythonReferences(index, definition, refOptions),
+    findSymbolReferences: (definition, refOptions) => {
+      // Initialize parser for reference finding
+      const parser = new Parser();
+      parser.setLanguage(Python);
+      return findPythonReferences(index, definition, refOptions, parser);
+    },
     extractSnippet: (filePath, range) => extractSnippet(filePath, range),
-    findCallExpressions: (callOptions) =>
+    findCallExpressions: async (callOptions) =>
       findPythonCallExpressions(
         {
           workspaceRoot: workspace.root,
@@ -106,6 +106,10 @@ async function buildPythonIndex(
   cachedDefinitions?: Map<string, PythonDefinition[]>,
   cachedImportGraph?: ImportGraph
 ): Promise<PythonIndex> {
+  // Initialize parser when function is called (lazy loading)
+  const parser = new Parser();
+  parser.setLanguage(Python);
+  
   const moduleMap = cachedModuleMap ?? new Map<string, string>();
   const fileModules = new Map<string, string>();
   const definitions = cachedDefinitions ?? new Map<string, PythonDefinition[]>();
@@ -133,7 +137,7 @@ async function buildPythonIndex(
 
   const importGraph =
     cachedImportGraph ??
-    buildPythonImportGraph(workspace, files, fileContents, fileModules, moduleMap);
+    await buildPythonImportGraph(workspace, files, fileContents, fileModules, moduleMap, parser);
 
   return {
     workspace,
@@ -167,12 +171,12 @@ function resolveModuleName(
   return undefined;
 }
 
-function collectDefinitions(root: Parser.SyntaxNode): PythonDefinition[] {
+function collectDefinitions(root: any): PythonDefinition[] {
   const definitions: PythonDefinition[] = [];
 
-  const visit = (node: Parser.SyntaxNode, currentClass?: PythonDefinition): void => {
+  const visit = (node: any, currentClass?: PythonDefinition): void => {
     if (node.type === "decorated_definition") {
-      const defNode = node.namedChildren.find((child) =>
+      const defNode = node.namedChildren.find((child: any) =>
         ["function_definition", "class_definition"].includes(child.type)
       );
       if (defNode) {
@@ -235,8 +239,8 @@ function collectDefinitions(root: Parser.SyntaxNode): PythonDefinition[] {
 }
 
 function createDefinition(
-  node: Parser.SyntaxNode,
-  rangeNode: Parser.SyntaxNode,
+  node: any,
+  rangeNode: any,
   currentClass?: PythonDefinition
 ): PythonDefinition | null {
   const nameNode = node.childForFieldName("name");
@@ -265,20 +269,21 @@ function createDefinition(
   };
 }
 
-function toRange(node: Parser.SyntaxNode): Range {
+function toRange(node: any): Range {
   return {
     startLine: node.startPosition.row + 1,
     endLine: node.endPosition.row + 1,
   };
 }
 
-function buildPythonImportGraph(
+async function buildPythonImportGraph(
   workspace: Workspace,
   files: string[],
   fileContents: Map<string, string>,
   fileModules: Map<string, string>,
-  moduleMap: Map<string, string>
-): ImportGraph {
+  moduleMap: Map<string, string>,
+  parser: any
+): Promise<ImportGraph> {
   const graph: ImportGraph = new Map();
 
   /**
@@ -325,7 +330,7 @@ function buildPythonImportGraph(
       if (!functionNode) continue;
 
       let isDynamicImport = false;
-      let moduleArg: Parser.SyntaxNode | null = null;
+      let moduleArg: any | null = null;
 
       // Check for importlib.import_module("...")
       if (functionNode.type === "attribute") {
@@ -372,13 +377,13 @@ function buildPythonImportGraph(
 }
 
 function extractImportedModules(
-  node: Parser.SyntaxNode,
+  node: any,
   currentModule?: string
 ): string[] {
   if (node.type === "import_statement") {
     return node.namedChildren
-      .filter((child) => child.type === "dotted_name")
-      .map((child) => child.text);
+      .filter((child: any) => child.type === "dotted_name")
+      .map((child: any) => child.text);
   }
   if (node.type === "import_from_statement") {
     let moduleName = "";
@@ -399,11 +404,11 @@ function extractImportedModules(
       : moduleName;
 
     const importedNames = node.namedChildren
-      .filter((child) => child.type === "import_list")
-      .flatMap((child) =>
+      .filter((child: any) => child.type === "import_list")
+      .flatMap((child: any) =>
         child.namedChildren
-          .filter((item) => item.type === "dotted_name" || item.type === "identifier")
-          .map((item) => item.text)
+          .filter((item: any) => item.type === "dotted_name" || item.type === "identifier")
+          .map((item: any) => item.text)
       );
 
     const modules = [fullModule].filter(Boolean);
@@ -534,7 +539,8 @@ function shrinkRange(range: Range, maxLines: number): Range {
 async function findPythonReferences(
   index: PythonIndex,
   definition: SymbolLocation,
-  options?: { limit?: number; anchorFiles?: string[] }
+  options?: { limit?: number; anchorFiles?: string[] },
+  parser?: any
 ): Promise<SymbolLocation[]> {
   const name =
     definition.symbolName?.split(".").slice(-1)[0] ??
@@ -545,7 +551,7 @@ async function findPythonReferences(
 
   for (const file of index.files) {
     const text = index.fileContents.get(file) ?? "";
-    const tree = parser.parse(text);
+    const tree = parser!.parse(text);
     const lines = text.split(/\r?\n/);
     const matchedLines = new Set<number>();
     const nodes = tree.rootNode.descendantsOfType(["identifier", "attribute"]);

@@ -69,6 +69,6 @@ export interface AdapterIndex {
   findCallExpressions?: (options?: {
     files?: string[];
     symbolFilter?: string[];
-  }) => CallExpression[];
+  }) => Promise<CallExpression[]>;
   metadata?: AdapterMetadata;
 }

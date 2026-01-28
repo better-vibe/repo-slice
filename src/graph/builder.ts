@@ -96,7 +96,7 @@ async function buildCallGraph(
   for (const adapter of options.adapters) {
     if (!adapter.findCallExpressions) continue;
 
-    const callExpressions = adapter.findCallExpressions({
+    const callExpressions = await adapter.findCallExpressions({
       files: anchorFilesArray.filter((f) =>
         f.startsWith(adapter.workspace.root)
       ),

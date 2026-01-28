@@ -4,9 +4,6 @@ import type { CallExpression, Range } from "../types.js";
 import { normalizePath, toPosixPath } from "../../utils/path.js";
 import { relative } from "node:path";
 
-const parser = new Parser();
-parser.setLanguage(Python);
-
 export interface FindPyCallsOptions {
   files?: string[];
   symbolFilter?: string[];
@@ -19,10 +16,14 @@ export interface PythonCallContext {
   moduleMap: Map<string, string>;
 }
 
-export function findPythonCallExpressions(
+export async function findPythonCallExpressions(
   context: PythonCallContext,
   options?: FindPyCallsOptions
-): CallExpression[] {
+): Promise<CallExpression[]> {
+  // Initialize parser when function is called
+  const parser = new Parser();
+  parser.setLanguage(Python);
+  
   const results: CallExpression[] = [];
   const targetFiles = options?.files
     ? new Set(options.files.map((f) => normalizePath(f)))
@@ -38,7 +39,7 @@ export function findPythonCallExpressions(
     const callNodes = tree.rootNode.descendantsOfType(["call"]);
 
     for (const callNode of callNodes) {
-      const callExpr = analyzeCallNode(
+      const callExpr = await analyzeCallNode(
         callNode,
         filePath,
         context
@@ -54,11 +55,11 @@ export function findPythonCallExpressions(
   return results;
 }
 
-function analyzeCallNode(
-  node: Parser.SyntaxNode,
+async function analyzeCallNode(
+  node: any,
   filePath: string,
   context: PythonCallContext
-): CallExpression | null {
+): Promise<CallExpression | null> {
   const functionNode = node.childForFieldName("function");
   if (!functionNode) return null;
 
@@ -130,8 +131,8 @@ function analyzeCallNode(
   };
 }
 
-function findEnclosingFunction(node: Parser.SyntaxNode): string | undefined {
-  let current: Parser.SyntaxNode | null = node.parent;
+function findEnclosingFunction(node: any): string | undefined {
+  let current: any | null = node.parent;
 
   while (current) {
     if (current.type === "function_definition") {
@@ -150,8 +151,8 @@ function findEnclosingFunction(node: Parser.SyntaxNode): string | undefined {
   return undefined;
 }
 
-function findEnclosingClass(node: Parser.SyntaxNode): string | undefined {
-  let current: Parser.SyntaxNode | null = node.parent;
+function findEnclosingClass(node: any): string | undefined {
+  let current: any | null = node.parent;
 
   while (current) {
     if (current.type === "class_definition") {
@@ -243,9 +244,9 @@ function findClassContext(
   return undefined;
 }
 
-function buildAttributeChain(node: Parser.SyntaxNode): string {
+function buildAttributeChain(node: any): string {
   const parts: string[] = [];
-  let current: Parser.SyntaxNode | null = node;
+  let current: any | null = node;
 
   while (current) {
     if (current.type === "attribute") {
@@ -266,7 +267,7 @@ function buildAttributeChain(node: Parser.SyntaxNode): string {
   return parts.join(".");
 }
 
-function toRange(node: Parser.SyntaxNode): Range {
+function toRange(node: any): Range {
   return {
     startLine: node.startPosition.row + 1,
     endLine: node.endPosition.row + 1,

@@ -41,7 +41,7 @@
   "scripts": {
     "clean": "rm -rf dist",
     "typecheck": "tsc --noEmit",
-    "build": "bun build src/cli.ts --outdir dist --target node",
+    "build": "bun build src/cli.ts --outdir dist --target node --production --packages external",
     "dev": "bun run src/cli.ts",
     "test": "bun test",
     "test:unit": "bun test test/budget.test.ts test/output-md.test.ts test/output-json.test.ts test/workspaces.test.ts test/anchors-diff.test.ts test/anchors-log.test.ts",
