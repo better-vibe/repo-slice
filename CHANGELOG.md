@@ -1,5 +1,11 @@
 # @better-vibe/repo-slice
 
+## 1.0.1
+
+### Patch Changes
+
+- 8ac45ac: improve build dist
+
 ## 1.0.0
 
 ### Major Changes
