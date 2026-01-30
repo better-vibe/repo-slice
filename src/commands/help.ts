@@ -4,7 +4,7 @@ export function renderHelp(): string {
 Usage:
   repo-slice pack [options]
   repo-slice graph [options]
-  repo-slice workspaces
+  repo-slice workspaces [options]
   repo-slice version
 
 Pack options:
@@ -20,7 +20,7 @@ Pack options:
   --budget-chars <n>
   --budget-tokens <n>
   --include-tests <auto|true|false>
-  --format <md|json>
+  --format <json|md>       Output format (default: json)
   --out <path>
   --reason
   --redact
@@ -44,6 +44,9 @@ Graph options:
   --format <json|dot>
   --out <path>
   --no-timestamp
+
+Workspaces options:
+  --format <json|text>     Output format (default: json)
 
 Exit codes:
   0 success

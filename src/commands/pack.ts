@@ -2,7 +2,7 @@ import { renderHelp } from "./help.js";
 import { runPack } from "../pack/runPack.js";
 
 export type IncludeTestsMode = "auto" | "true" | "false";
-export type OutputFormat = "md" | "json";
+export type OutputFormat = "json" | "md";
 
 export interface PackCliArgs {
   entries: string[];

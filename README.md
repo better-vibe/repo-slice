@@ -59,11 +59,11 @@ repo-slice pack --from-diff HEAD~3..HEAD
 # Parse error logs and bundle relevant code
 repo-slice pack --from-log build-errors.txt
 
-# Output as JSON instead of Markdown
-repo-slice pack --entry src/app.ts --format json
+# Output as Markdown instead of JSON (default)
+repo-slice pack --entry src/app.ts --format md
 
 # Save to file
-repo-slice pack --entry src/api.ts --out context.md
+repo-slice pack --entry src/api.ts --out context.json
 ```
 
 ## Commands
@@ -114,23 +114,36 @@ Extract a context bundle from the repository.
 
 | Option | Description |
 |--------|-------------|
-| `--format <md\|json>` | Output format |
+| `--format <json\|md>` | Output format (default: json) |
 | `--out <path>` | Write to file instead of stdout |
 | `--reason` | Include selection reasons in output |
 | `--redact` | Redact secrets (API keys, etc.) |
 | `--no-timestamp` | Omit timestamp for reproducible output |
 | `--debug` | Enable debug logging |
 
-### `repo-slice workspaces`
+### `repo-slice workspaces [options]`
 
 List detected workspaces in the repository.
 
 ```bash
 $ repo-slice workspaces
-packages/web    node    /path/to/repo/packages/web
-packages/api    node    /path/to/repo/packages/api
-services/ml     python  /path/to/repo/services/ml
+[
+  {
+    "name": "packages/web",
+    "kind": "node",
+    "root": "/path/to/repo/packages/web"
+  },
+  {
+    "name": "packages/api",
+    "kind": "node",
+    "root": "/path/to/repo/packages/api"
+  }
+]
 ```
+
+| Option | Description |
+|--------|-------------|
+| `--format <json\|text>` | Output format (default: json) |
 
 ### `repo-slice version`
 
@@ -200,10 +213,10 @@ Then disambiguate:
 repo-slice pack --symbol "src/config/app.ts:Config"
 ```
 
-### JSON Output for Tooling
+### JSON Output for Tooling (default)
 
 ```bash
-repo-slice pack --entry src/api.ts --format json | jq '.items[].filePath'
+repo-slice pack --entry src/api.ts | jq '.items[].filePath'
 ```
 
 ### Monorepo Usage
@@ -270,7 +283,7 @@ Create `.repo-slicerc.json` at your repository root or workspace root:
 
 ## Output Formats
 
-### Markdown (default)
+### Markdown
 
 ```markdown
 # repo-slice bundle

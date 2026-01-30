@@ -68,7 +68,7 @@ export async function runPack(args: PackCliArgs): Promise<void> {
   const includeTests = args.includeTests ?? effectiveConfig.includeTests;
   const budgetChars = args.budgetChars ?? effectiveConfig.budgetChars;
   const budgetTokens = args.budgetTokens;
-  const format = args.format ?? "md";
+  const format = args.format ?? "json";
   const includeReasons = Boolean(args.reason);
   const redactEnabled = args.redact === true || effectiveConfig.redact.enabled;
   const logger = createLogger(Boolean(args.debug));
