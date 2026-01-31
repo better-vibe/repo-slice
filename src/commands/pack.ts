@@ -40,7 +40,22 @@ export async function packCommand(argv: string[]): Promise<void> {
     process.stdout.write(renderHelp() + "\n");
     process.exit(0);
   }
-  await runPack(parsed.args);
+
+  const { args } = parsed;
+  if (
+    args.entries.length === 0 &&
+    args.symbols.length === 0 &&
+    !args.fromDiff &&
+    !args.fromLog
+  ) {
+    process.stderr.write("Error: No anchors specified.\n");
+    process.stderr.write("Use --entry, --symbol, --from-diff, or --from-log to specify what to include.\n\n");
+    process.stderr.write(renderHelp() + "\n");
+    process.exit(3);
+    return;
+  }
+
+  await runPack(args);
 }
 
 interface ParsedPackArgs {

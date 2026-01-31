@@ -22,7 +22,22 @@ export async function graphCommand(argv: string[]): Promise<void> {
     process.stdout.write(renderGraphHelp() + "\n");
     process.exit(0);
   }
-  await runGraph(parsed.args);
+
+  const { args } = parsed;
+  if (
+    args.entries.length === 0 &&
+    args.symbols.length === 0 &&
+    !args.fromDiff &&
+    !args.fromLog
+  ) {
+    process.stderr.write("Error: No anchors specified.\n");
+    process.stderr.write("Use --entry, --symbol, --from-diff, or --from-log to specify what to include.\n\n");
+    process.stderr.write(renderGraphHelp() + "\n");
+    process.exit(3);
+    return;
+  }
+
+  await runGraph(args);
 }
 
 interface ParsedGraphArgs {
