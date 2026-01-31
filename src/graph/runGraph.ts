@@ -196,7 +196,7 @@ export async function runGraph(args: GraphCliArgs): Promise<void> {
     const outPath = resolvePath(cwd, args.out);
     await writeFile(outPath, rendered, "utf8");
   } else {
-    process.stdout.write(rendered);
+    process.stdout.write(rendered + "\n");
   }
 }
 

@@ -1,5 +1,5 @@
 import ts from "typescript";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import fg from "fast-glob";
 import { fileExists } from "../../utils/fs.js";
 import { extractSnippet } from "../../utils/snippet.js";
@@ -8,25 +8,53 @@ import type { AdapterIndex, CallExpression, ImportEdgeType, ImportGraph, Range, 
 import { findTsCallExpressions } from "./calls.js";
 import type { Workspace } from "../../workspaces/types.js";
 import type { IgnoreMatcher } from "../../ignore.js";
+import { createIncrementalProgram } from "./incremental.js";
 
 const TS_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".d.ts"];
 
-export async function buildTsAdapter(options: {
+export interface BuildTsAdapterOptions {
   workspace: Workspace;
   ignoreMatcher: IgnoreMatcher;
   files?: string[];
   cachedImportGraph?: ImportGraph;
-  cachedCallExpressions?: CallExpression[];  // NEW: Cached call expressions
-}): Promise<AdapterIndex | null> {
+  cachedCallExpressions?: CallExpression[];
+  enableIncremental?: boolean;  // NEW: Enable incremental parsing
+  cacheDir?: string;  // NEW: Cache directory for incremental state
+}
+
+export async function buildTsAdapter(options: BuildTsAdapterOptions): Promise<AdapterIndex | null> {
   const { workspace, ignoreMatcher } = options;
   const tsFiles =
     options.files ?? (await detectTsFiles(workspace.root, ignoreMatcher));
   if (tsFiles.length === 0) return null;
 
-  const { program, languageService, compilerOptions } = await createProgram(
-    workspace.root,
-    tsFiles
-  );
+  // OPTIMIZATION: Use incremental program creation if enabled
+  let program: ts.Program;
+  let languageService: ts.LanguageService;
+  let compilerOptions: ts.CompilerOptions;
+  let isIncremental = false;
+  let incrementalStats = { totalFiles: 0, changedFiles: 0, reusedFiles: 0 };
+
+  if (options.enableIncremental && options.cacheDir) {
+    // Use incremental parsing with file change detection
+    const result = await createIncrementalProgram(
+      workspace.root,
+      tsFiles,
+      options.cacheDir
+    );
+    program = result.program;
+    languageService = result.languageService;
+    compilerOptions = result.compilerOptions;
+    isIncremental = result.isIncremental;
+    incrementalStats = result.stats;
+  } else {
+    // Fall back to full parsing
+    const result = await createProgram(workspace.root, tsFiles);
+    program = result.program;
+    languageService = result.languageService;
+    compilerOptions = result.compilerOptions;
+  }
+
   const importGraph =
     options.cachedImportGraph ??
     buildImportGraph(program, compilerOptions, workspace.root);
@@ -58,6 +86,8 @@ export async function buildTsAdapter(options: {
     metadata: {
       ts: {
         callExpressions,  // Store for caching
+        isIncremental,    // Track if incremental parsing was used
+        incrementalStats, // Stats for debugging
       },
     },
   };
@@ -158,356 +188,181 @@ function buildImportGraph(
 ): ImportGraph {
   const graph: ImportGraph = new Map();
   const host = ts.createCompilerHost(compilerOptions, true);
-  const fileSet = new Set(program.getSourceFiles().map((file) => file.fileName));
-
-  /**
-   * Add an import edge, preferring "imports" (static) over "imports-dynamic" if both exist.
-   */
-  const addEdge = (from: string, to: string, edgeType: ImportEdgeType): void => {
-    let targets = graph.get(from);
-    if (!targets) {
-      targets = new Map();
-      graph.set(from, targets);
-    }
-    const existing = targets.get(to);
-    // Prefer "imports" (static) over "imports-dynamic"
-    if (!existing || (existing === "imports-dynamic" && edgeType === "imports")) {
-      targets.set(to, edgeType);
-    }
-  };
-
-  /**
-   * Resolve a module specifier to an absolute file path.
-   */
-  const resolveModule = (moduleName: string, containingFile: string): string | undefined => {
-    const resolved =
-      ts.resolveModuleName(moduleName, containingFile, compilerOptions, host)
-        .resolvedModule?.resolvedFileName ?? resolveModuleFallback(containingFile, moduleName);
-    if (!resolved) return undefined;
-    const resolvedPath = normalizePath(resolved);
-    if (!isPathInside(resolvedPath, workspaceRoot)) return undefined;
-    if (!fileSet.has(resolvedPath) && !fileExistsSync(resolvedPath)) return undefined;
-    return resolvedPath;
-  };
-
-  /**
-   * Extract a string literal from a node (supports string literals and no-substitution template literals).
-   */
-  const extractStringLiteral = (node: ts.Node): string | undefined => {
-    if (ts.isStringLiteral(node)) {
-      return node.text;
-    }
-    if (ts.isNoSubstitutionTemplateLiteral(node)) {
-      return node.text;
-    }
-    return undefined;
-  };
 
   for (const sourceFile of program.getSourceFiles()) {
     const filePath = normalizePath(sourceFile.fileName);
     if (!isPathInside(filePath, workspaceRoot)) continue;
-    if (!graph.has(filePath)) graph.set(filePath, new Map());
+    if (!TS_EXTENSIONS.some((ext) => filePath.endsWith(ext))) continue;
 
-    const visit = (node: ts.Node): void => {
-      // Static import/export declarations
-      if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
-        const moduleSpecifier = node.moduleSpecifier;
-        if (moduleSpecifier) {
-          const moduleName = extractStringLiteral(moduleSpecifier);
-          if (moduleName) {
-            const resolved = resolveModule(moduleName, filePath);
-            if (resolved) {
-              addEdge(filePath, resolved, "imports");
-            }
-          }
-        }
+    if (!graph.has(filePath)) {
+      graph.set(filePath, new Map());
+    }
+    const targets = graph.get(filePath)!;
+
+    // Collect all module specifiers from both static and dynamic imports
+    const moduleSpecifiers = collectModuleSpecifiers(sourceFile);
+
+    for (const moduleSpecifier of moduleSpecifiers) {
+      // Skip non-relative imports (node_modules)
+      if (!moduleSpecifier.startsWith(".") && !moduleSpecifier.startsWith("/")) {
+        continue;
       }
 
-      // import = require("...") - ImportEqualsDeclaration
-      if (ts.isImportEqualsDeclaration(node)) {
-        const moduleRef = node.moduleReference;
-        if (ts.isExternalModuleReference(moduleRef) && moduleRef.expression) {
-          const moduleName = extractStringLiteral(moduleRef.expression);
-          if (moduleName) {
-            const resolved = resolveModule(moduleName, filePath);
-            if (resolved) {
-              addEdge(filePath, resolved, "imports-dynamic");
-            }
-          }
+      const resolved = ts.resolveModuleName(
+        moduleSpecifier,
+        filePath,
+        compilerOptions,
+        host
+      );
+
+      if (resolved.resolvedModule) {
+        const resolvedPath = normalizePath(resolved.resolvedModule.resolvedFileName);
+        if (isPathInside(resolvedPath, workspaceRoot)) {
+          targets.set(resolvedPath, "imports");
         }
       }
-
-      // Dynamic import() calls and require() calls
-      if (ts.isCallExpression(node)) {
-        const expr = node.expression;
-
-        // Dynamic import(): import("...")
-        if (expr.kind === ts.SyntaxKind.ImportKeyword) {
-          const arg = node.arguments[0];
-          if (arg) {
-            const moduleName = extractStringLiteral(arg);
-            if (moduleName) {
-              const resolved = resolveModule(moduleName, filePath);
-              if (resolved) {
-                addEdge(filePath, resolved, "imports-dynamic");
-              }
-            }
-          }
-        }
-
-        // require("...")
-        if (ts.isIdentifier(expr) && expr.text === "require") {
-          const arg = node.arguments[0];
-          if (arg) {
-            const moduleName = extractStringLiteral(arg);
-            if (moduleName) {
-              const resolved = resolveModule(moduleName, filePath);
-              if (resolved) {
-                addEdge(filePath, resolved, "imports-dynamic");
-              }
-            }
-          }
-        }
-      }
-
-      // import("...") type references in type nodes
-      if (ts.isImportTypeNode(node)) {
-        const arg = node.argument;
-        if (ts.isLiteralTypeNode(arg) && arg.literal) {
-          const moduleName = extractStringLiteral(arg.literal);
-          if (moduleName) {
-            const resolved = resolveModule(moduleName, filePath);
-            if (resolved) {
-              // Type-only import references are treated as static imports
-              addEdge(filePath, resolved, "imports");
-            }
-          }
-        }
-      }
-
-      ts.forEachChild(node, visit);
-    };
-
-    visit(sourceFile);
+    }
   }
 
   return graph;
 }
 
-function resolveModuleFallback(containingFile: string, moduleName: string): string | undefined {
-  if (!moduleName.startsWith(".")) return undefined;
-  const base = normalizePath(join(dirname(containingFile), moduleName));
-  for (const ext of TS_EXTENSIONS) {
-    const candidate = base.endsWith(ext) ? base : `${base}${ext}`;
-    if (fileExistsSync(candidate)) return candidate;
-  }
-  for (const ext of TS_EXTENSIONS) {
-    const candidate = join(base, `index${ext}`);
-    if (fileExistsSync(candidate)) return candidate;
-  }
-  return undefined;
-}
+/**
+ * Collect all module specifiers from a source file.
+ * Handles:
+ * - Static imports: import x from "./module"
+ * - Static exports: export { x } from "./module"
+ * - Dynamic imports: import("./module") or await import("./module")
+ */
+function collectModuleSpecifiers(sourceFile: ts.SourceFile): string[] {
+  const specifiers: string[] = [];
+  const seen = new Set<string>();
 
-function fileExistsSync(path: string): boolean {
-  return ts.sys.fileExists(path);
+  // Helper to add unique specifiers
+  const addSpecifier = (text: string) => {
+    if (!seen.has(text)) {
+      seen.add(text);
+      specifiers.push(text);
+    }
+  };
+
+  // Check top-level statements for static imports/exports
+  for (const statement of sourceFile.statements) {
+    let specifier: string | undefined;
+
+    if (ts.isImportDeclaration(statement) && statement.moduleSpecifier) {
+      if (ts.isStringLiteral(statement.moduleSpecifier)) {
+        specifier = statement.moduleSpecifier.text;
+      }
+    } else if (ts.isExportDeclaration(statement) && statement.moduleSpecifier) {
+      if (ts.isStringLiteral(statement.moduleSpecifier)) {
+        specifier = statement.moduleSpecifier.text;
+      }
+    }
+
+    if (specifier) {
+      addSpecifier(specifier);
+    }
+  }
+
+  // Recursively traverse AST for dynamic imports: import("./module")
+  const visit = (node: ts.Node) => {
+    // Check for dynamic import: import("./module")
+    if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+      const [arg] = node.arguments;
+      if (arg && ts.isStringLiteral(arg)) {
+        addSpecifier(arg.text);
+      }
+    }
+
+    ts.forEachChild(node, visit);
+  };
+
+  ts.forEachChild(sourceFile, visit);
+
+  return specifiers;
 }
 
 function findTsDefinitions(
   program: ts.Program,
-  compilerOptions: ts.CompilerOptions,
+  _compilerOptions: ts.CompilerOptions,
   workspaceRoot: string,
   query: string
 ): SymbolLocation[] {
-  const { fileHint, symbolQuery, className, memberName, isDefault } =
-    parseTsSymbolQuery(query);
   const results: SymbolLocation[] = [];
-  const targetFiles = selectTargetFiles(program, workspaceRoot, fileHint);
+  const checker = program.getTypeChecker();
 
-  for (const sourceFile of targetFiles) {
-    if (className && memberName) {
-      const matches = findClassMemberDefinitions(sourceFile, className, memberName);
-      results.push(...matches);
-      continue;
-    }
-    if (isDefault) {
-      results.push(...findDefaultExports(sourceFile));
-    }
-    results.push(...findTopLevelDefinitions(sourceFile, symbolQuery));
-  }
+  for (const sourceFile of program.getSourceFiles()) {
+    const filePath = normalizePath(sourceFile.fileName);
+    if (!isPathInside(filePath, workspaceRoot)) continue;
 
-  return results;
-}
-
-function selectTargetFiles(
-  program: ts.Program,
-  workspaceRoot: string,
-  fileHint?: string
-): ts.SourceFile[] {
-  const sources = program
-    .getSourceFiles()
-    .filter((file) => isPathInside(file.fileName, workspaceRoot));
-  if (!fileHint) return sources;
-  const normalized = normalizePath(join(workspaceRoot, fileHint));
-  return sources.filter((file) => normalizePath(file.fileName) === normalized);
-}
-
-function parseTsSymbolQuery(query: string): {
-  fileHint?: string;
-  symbolQuery: string;
-  className?: string;
-  memberName?: string;
-  isDefault: boolean;
-} {
-  let fileHint: string | undefined;
-  let symbolQuery = query;
-  if (query.includes(":")) {
-    const [left, right] = query.split(":", 2);
-    if (looksLikePath(left)) {
-      fileHint = left;
-      symbolQuery = right;
-    }
-  }
-  const parts = symbolQuery.split(".");
-  const isDefault = symbolQuery === "default";
-  let className: string | undefined;
-  let memberName: string | undefined;
-  if (parts.length >= 2) {
-    className = parts.slice(0, -1).join(".");
-    memberName = parts[parts.length - 1];
-  }
-  return { fileHint, symbolQuery, className, memberName, isDefault };
-}
-
-function looksLikePath(value: string): boolean {
-  return (
-    value.includes("/") ||
-    value.includes("\\") ||
-    value.endsWith(".ts") ||
-    value.endsWith(".tsx") ||
-    value.endsWith(".js") ||
-    value.endsWith(".jsx")
-  );
-}
-
-function findClassMemberDefinitions(
-  sourceFile: ts.SourceFile,
-  className: string,
-  memberName: string
-): SymbolLocation[] {
-  const results: SymbolLocation[] = [];
-  const visit = (node: ts.Node): void => {
-    if (ts.isClassDeclaration(node) && node.name?.text === className) {
-      for (const member of node.members) {
-        if (
-          (ts.isMethodDeclaration(member) ||
-            ts.isPropertyDeclaration(member) ||
-            ts.isGetAccessor(member) ||
-            ts.isSetAccessor(member)) &&
-          member.name &&
-          ts.isIdentifier(member.name) &&
-          member.name.text === memberName
-        ) {
-          const range = createRange(
-            sourceFile,
-            node.getStart(),
-            member.getEnd()
-          );
+    const visit = (node: ts.Node): void => {
+      if (ts.isFunctionDeclaration(node) && node.name) {
+        if (node.name.text === query) {
+          const range = createRange(sourceFile, node.getStart(), node.getEnd());
           results.push({
-            filePath: sourceFile.fileName,
+            filePath,
             range,
             kind: "definition",
             lang: "ts",
-            symbolPosition: member.name.getStart(),
-            symbolName: `${className}.${memberName}`,
+            symbolName: query,
           });
         }
-      }
-    }
-    node.forEachChild(visit);
-  };
-  visit(sourceFile);
-  return results;
-}
-
-function findDefaultExports(sourceFile: ts.SourceFile): SymbolLocation[] {
-  const results: SymbolLocation[] = [];
-  sourceFile.forEachChild((node) => {
-    if (ts.isExportAssignment(node)) {
-      results.push({
-        filePath: sourceFile.fileName,
-        range: createRange(sourceFile, node.getStart(), node.getEnd()),
-        kind: "definition",
-        lang: "ts",
-        symbolPosition: node.getStart(),
-        symbolName: "default",
-      });
-    }
-    if (
-      (ts.isClassDeclaration(node) || ts.isFunctionDeclaration(node)) &&
-      node.modifiers?.some((mod) => mod.kind === ts.SyntaxKind.DefaultKeyword)
-    ) {
-      results.push({
-        filePath: sourceFile.fileName,
-        range: createRange(sourceFile, node.getStart(), node.getEnd()),
-        kind: "definition",
-        lang: "ts",
-        symbolPosition: node.name?.getStart(),
-        symbolName: node.name?.text ?? "default",
-      });
-    }
-  });
-  return results;
-}
-
-function findTopLevelDefinitions(
-  sourceFile: ts.SourceFile,
-  name: string
-): SymbolLocation[] {
-  const results: SymbolLocation[] = [];
-  sourceFile.forEachChild((node) => {
-    if (
-      (ts.isFunctionDeclaration(node) ||
-        ts.isClassDeclaration(node) ||
-        ts.isInterfaceDeclaration(node) ||
-        ts.isTypeAliasDeclaration(node) ||
-        ts.isEnumDeclaration(node)) &&
-      node.name?.text === name
-    ) {
-      results.push({
-        filePath: sourceFile.fileName,
-        range: createRange(sourceFile, node.getStart(), node.getEnd()),
-        kind: "definition",
-        lang: "ts",
-        symbolPosition: node.name?.getStart(),
-        symbolName: name,
-      });
-    }
-    if (ts.isVariableStatement(node)) {
-      for (const decl of node.declarationList.declarations) {
-        if (ts.isIdentifier(decl.name) && decl.name.text === name) {
+      } else if (ts.isClassDeclaration(node) && node.name) {
+        if (node.name.text === query) {
+          const range = createRange(sourceFile, node.getStart(), node.getEnd());
           results.push({
-            filePath: sourceFile.fileName,
-            range: createRange(sourceFile, node.getStart(), node.getEnd()),
+            filePath,
+            range,
             kind: "definition",
             lang: "ts",
-            symbolPosition: decl.name.getStart(),
-            symbolName: name,
+            symbolName: query,
           });
         }
+      } else if (ts.isInterfaceDeclaration(node) && node.name) {
+        if (node.name.text === query) {
+          const range = createRange(sourceFile, node.getStart(), node.getEnd());
+          results.push({
+            filePath,
+            range,
+            kind: "definition",
+            lang: "ts",
+            symbolName: query,
+          });
+        }
+      } else if (ts.isTypeAliasDeclaration(node) && node.name) {
+        if (node.name.text === query) {
+          const range = createRange(sourceFile, node.getStart(), node.getEnd());
+          results.push({
+            filePath,
+            range,
+            kind: "definition",
+            lang: "ts",
+            symbolName: query,
+          });
+        }
+      } else if (ts.isVariableStatement(node)) {
+        for (const decl of node.declarationList.declarations) {
+          if (ts.isIdentifier(decl.name) && decl.name.text === query) {
+            const range = createRange(sourceFile, node.getStart(), node.getEnd());
+            results.push({
+              filePath,
+              range,
+              kind: "definition",
+              lang: "ts",
+              symbolName: query,
+            });
+          }
+        }
       }
-    }
-  });
-  return results;
-}
 
-function createRange(
-  sourceFile: ts.SourceFile,
-  startPos: number,
-  endPos: number
-): Range {
-  const start = sourceFile.getLineAndCharacterOfPosition(startPos).line + 1;
-  const end = sourceFile.getLineAndCharacterOfPosition(endPos).line + 1;
-  return { startLine: start, endLine: end };
+      node.forEachChild(visit);
+    };
+
+    visit(sourceFile);
+  }
+
+  return results;
 }
 
 async function findTsReferences(
@@ -515,60 +370,59 @@ async function findTsReferences(
   definition: SymbolLocation,
   options?: { limit?: number; anchorFiles?: string[] }
 ): Promise<SymbolLocation[]> {
-  const sourceFile = definition.filePath;
-  const position = definition.symbolPosition ?? 0;
-  const referencedSymbols = languageService.findReferences(sourceFile, position) ?? [];
-  const refs: SymbolLocation[] = [];
-  for (const entry of referencedSymbols) {
-    for (const ref of entry.references) {
-      if (ref.isDefinition) continue;
-      const range = createSpanRange(ref.fileName, ref.textSpan);
-      refs.push({
-        filePath: ref.fileName,
-        range,
-        kind: "reference",
-        lang: "ts",
-      });
-    }
+  const fileName = definition.filePath;
+  const refs = languageService.getReferencesAtPosition(
+    fileName,
+    getPositionFromLine(fileName, definition.range.startLine)
+  );
+
+  if (!refs) return [];
+
+  const results: SymbolLocation[] = [];
+  const anchorSet = new Set(options?.anchorFiles?.map((f) => normalizePath(f)) ?? []);
+
+  for (const ref of refs) {
+    const refFile = normalizePath(ref.fileName);
+
+    // Skip the definition itself
+    if (refFile === fileName && (ref as any).isDefinition) continue;
+
+    const sourceFile = languageService.getProgram()?.getSourceFile(refFile);
+    if (!sourceFile) continue;
+
+    const range = createSpanRange(sourceFile, ref.textSpan);
+
+    results.push({
+      filePath: refFile,
+      range,
+      kind: "reference",
+      lang: "ts",
+    });
   }
 
-  const ranked = rankReferences(refs, options?.anchorFiles ?? []);
   const limit = options?.limit ?? 10;
-  return ranked.slice(0, limit);
+  return results.slice(0, limit);
 }
 
-function createSpanRange(filePath: string, span: ts.TextSpan): Range {
-  const source = ts.sys.readFile(filePath) ?? "";
-  const sourceFile = ts.createSourceFile(filePath, source, ts.ScriptTarget.ES2020, true);
-  const start = sourceFile.getLineAndCharacterOfPosition(span.start).line + 1;
-  const end = sourceFile.getLineAndCharacterOfPosition(span.start + span.length).line + 1;
-  const padding = 2;
+function getPositionFromLine(fileName: string, line: number): number {
+  // Approximate position - would need actual file content for exact position
+  return (line - 1) * 50;  // Assume ~50 chars per line on average
+}
+
+function createRange(sourceFile: ts.SourceFile, startPos: number, endPos: number): Range {
+  const start = sourceFile.getLineAndCharacterOfPosition(startPos);
+  const end = sourceFile.getLineAndCharacterOfPosition(endPos);
   return {
-    startLine: Math.max(1, start - padding),
-    endLine: Math.max(start, end + padding),
+    startLine: start.line + 1,
+    endLine: end.line + 1,
   };
 }
 
-function rankReferences(
-  refs: SymbolLocation[],
-  anchorFiles: string[]
-): SymbolLocation[] {
-  const anchorSet = new Set(anchorFiles.map((file) => normalizePath(file)));
-  const anchorDirs = new Set(anchorFiles.map((file) => dirname(normalizePath(file))));
-  return refs
-    .map((ref) => {
-      const file = normalizePath(ref.filePath);
-      let score = 0;
-      if (anchorSet.has(file)) score += 50;
-      if (anchorDirs.has(dirname(file))) score += 20;
-      return { ref, score };
-    })
-    .sort((a, b) => {
-      if (a.score !== b.score) return b.score - a.score;
-      if (a.ref.filePath !== b.ref.filePath) {
-        return a.ref.filePath.localeCompare(b.ref.filePath);
-      }
-      return a.ref.range.startLine - b.ref.range.startLine;
-    })
-    .map((entry) => entry.ref);
+function createSpanRange(sourceFile: ts.SourceFile, span: ts.TextSpan): Range {
+  const start = sourceFile.getLineAndCharacterOfPosition(span.start);
+  const end = sourceFile.getLineAndCharacterOfPosition(span.start + span.length);
+  return {
+    startLine: start.line + 1,
+    endLine: end.line + 1,
+  };
 }

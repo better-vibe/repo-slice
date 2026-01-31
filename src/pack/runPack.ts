@@ -41,11 +41,15 @@ import {
   serializeImportGraph,
   serializeCallExpressions,
   deserializeCallExpressions,
+  setDebugCacheMode,
 } from "../cache/index.js";
 import type { WorkspaceCache } from "../cache/types.js";
 import { sha1 } from "../utils/hash.js";
 
 export async function runPack(args: PackCliArgs): Promise<void> {
+  // OPTIMIZATION: Set binary cache mode (JSON only with --debug-cache flag)
+  setDebugCacheMode(args.debugCache ?? false);
+  
   const cwd = process.cwd();
   const repoRoot = await detectRepoRoot(cwd);
   const allWorkspaces = await detectWorkspaces(repoRoot);
@@ -240,7 +244,7 @@ export async function runPack(args: PackCliArgs): Promise<void> {
     const outPath = resolvePath(cwd, args.out);
     await writeFile(outPath, output, "utf8");
   } else {
-    process.stdout.write(output);
+    process.stdout.write(output + "\n");
   }
 }
 
@@ -322,12 +326,18 @@ async function buildAdapters(options: {
       });
       const cacheValid = cache ? isCacheValid(cache, stats) : false;
       const cacheData = cacheValid ? toAdapterCache(cache) : undefined;
+      // OPTIMIZATION: Enable incremental TypeScript parsing
+      // Store TS service state in cache directory for fast warm-cache startup
+      const tsServiceCacheDir = join(options.repoRoot, ".repo-slice", "cache", configHash, "ts-service");
+      
       const workspaceAdapters = await buildAdaptersForWorkspace({
         workspace,
         ignoreMatcher,
         pythonImportRoots: effectiveConfig.workspaces.pythonImportRoots,
         files,
         cache: cacheData,
+        enableIncremental: true,  // NEW: Enable incremental parsing
+        cacheDir: tsServiceCacheDir,  // NEW: TS service cache directory
       });
 
       // Return cache data separately to save after all workspaces are processed

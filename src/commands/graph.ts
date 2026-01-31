@@ -14,12 +14,12 @@ export async function graphCommand(argv: string[]): Promise<void> {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     process.stderr.write(`${message}\n`);
-    process.stderr.write(renderGraphHelp());
+    process.stderr.write(renderGraphHelp() + "\n");
     process.exit(3);
     return;
   }
   if (parsed.help) {
-    process.stdout.write(renderGraphHelp());
+    process.stdout.write(renderGraphHelp() + "\n");
     process.exit(0);
   }
   await runGraph(parsed.args);

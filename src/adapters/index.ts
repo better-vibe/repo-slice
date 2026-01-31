@@ -11,13 +11,17 @@ export interface AdapterCacheData {
   pyCallExpressions?: CallExpression[];  // NEW: Cached Python call expressions
 }
 
-export async function buildAdaptersForWorkspace(options: {
+export interface BuildAdaptersOptions {
   workspace: Workspace;
   ignoreMatcher: IgnoreMatcher;
   pythonImportRoots: string[];
   files?: { tsFiles?: string[]; pyFiles?: string[] };
   cache?: AdapterCacheData;
-}): Promise<AdapterIndex[]> {
+  cacheDir?: string;  // NEW: Cache directory for incremental parsing
+  enableIncremental?: boolean;  // NEW: Enable incremental TypeScript parsing
+}
+
+export async function buildAdaptersForWorkspace(options: BuildAdaptersOptions): Promise<AdapterIndex[]> {
   const adapters: AdapterIndex[] = [];
   
   // Only build TypeScript adapter if TypeScript files exist
@@ -28,7 +32,10 @@ export async function buildAdaptersForWorkspace(options: {
       ignoreMatcher: options.ignoreMatcher,
       files: options.files.tsFiles,
       cachedImportGraph: options.cache?.tsImportGraph,
-      cachedCallExpressions: options.cache?.tsCallExpressions,  // NEW: Pass cached call expressions
+      cachedCallExpressions: options.cache?.tsCallExpressions,
+      // NEW: Enable incremental parsing if cache directory provided
+      enableIncremental: options.enableIncremental,
+      cacheDir: options.cacheDir,
     });
     if (tsAdapter) adapters.push(tsAdapter);
   }
