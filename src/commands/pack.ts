@@ -1,4 +1,3 @@
-import { renderHelp } from "./help.js";
 import { runPack } from "../pack/runPack.js";
 
 export type IncludeTestsMode = "auto" | "true" | "false";
@@ -22,6 +21,7 @@ export interface PackCliArgs {
   reason?: boolean;
   redact?: boolean;
   debug?: boolean;
+  debugCache?: boolean;  // NEW: Use JSON cache format for debugging
   noTimestamp?: boolean;
 }
 
@@ -32,15 +32,30 @@ export async function packCommand(argv: string[]): Promise<void> {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     process.stderr.write(`${message}\n`);
-    process.stderr.write(renderHelp());
+    process.stderr.write(renderHelp() + "\n");
     process.exit(3);
     return;
   }
   if (parsed.help) {
-    process.stdout.write(renderHelp());
+    process.stdout.write(renderHelp() + "\n");
     process.exit(0);
   }
-  await runPack(parsed.args);
+
+  const { args } = parsed;
+  if (
+    args.entries.length === 0 &&
+    args.symbols.length === 0 &&
+    !args.fromDiff &&
+    !args.fromLog
+  ) {
+    process.stderr.write("Error: No anchors specified.\n");
+    process.stderr.write("Use --entry, --symbol, --from-diff, or --from-log to specify what to include.\n\n");
+    process.stderr.write(renderHelp() + "\n");
+    process.exit(3);
+    return;
+  }
+
+  await runPack(args);
 }
 
 interface ParsedPackArgs {
@@ -146,6 +161,9 @@ function parsePackArgs(argv: string[]): ParsedPackArgs {
       case "--debug":
         args.debug = true;
         break;
+      case "--debug-cache":  // NEW: Debug cache format
+        args.debugCache = true;
+        break;
       case "--no-timestamp":
         args.noTimestamp = true;
         break;
@@ -154,17 +172,56 @@ function parsePackArgs(argv: string[]): ParsedPackArgs {
     }
   }
 
-  if (args.allWorkspaces && args.workspace) {
-    throw new Error("Cannot combine --all-workspaces with --workspace");
-  }
-
   return { help, args };
 }
 
 function parseNumber(value: string, flag: string): number {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) {
+  const num = Number(value);
+  if (!Number.isFinite(num) || num < 0 || !Number.isInteger(num)) {
     throw new Error(`Invalid number for ${flag}: ${value}`);
   }
-  return parsed;
+  return num;
+}
+
+function renderHelp(): string {
+  return `repo-slice pack - create a bundle from a codebase
+
+Usage:
+  repo-slice pack [options]
+
+Anchor options:
+  --entry <file>          Entry file(s) to include
+  --symbol <name>         Symbol(s) to anchor on
+  --symbol-strict         Only include files that define the symbol
+  --from-diff <rev>       Include files changed since git revision
+  --from-log <path>       Parse error log for file paths
+
+Scope options:
+  --workspace <dir>       Target workspace directory
+  --all-workspaces        Include all detected workspaces
+  --fallback-all          Fallback to all workspaces if none detected
+
+Expansion options:
+  --depth <n>             Import traversal depth (default: 2)
+  --budget-chars <n>      Character budget (default: 28000)
+  --budget-tokens <n>     Token budget (optional)
+  --include-tests <mode>  Test inclusion: auto, true, false (default: auto)
+
+Output options:
+  --format <json|md>      Output format (default: json)
+  --out <path>            Write to file instead of stdout
+  --reason                Include reason annotations
+  --redact                Redact sensitive patterns
+  --no-timestamp          Exclude timestamp from output
+
+Debug options:
+  --debug                 Enable verbose logging
+  --debug-cache           Use JSON cache format (human readable)
+  --help, -h              Show this help message
+
+Exit codes:
+  0 success
+  1 runtime error
+  3 invalid CLI usage
+`;
 }

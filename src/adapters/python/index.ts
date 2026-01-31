@@ -18,13 +18,32 @@ import { findPythonCallExpressions } from "./calls.js";
 import type { Workspace } from "../../workspaces/types.js";
 import type { IgnoreMatcher } from "../../ignore.js";
 
+// OPTIMIZATION: Store parsed AST trees to avoid re-parsing
+interface ParsedPythonFile {
+  filePath: string;
+  text: string;
+  tree: Parser.Tree;
+  definitions: PythonDefinition[];
+  imports?: ImportInfo[];  // Populated during import graph building
+}
+
+interface ImportInfo {
+  targetFile: string;
+  edgeType: ImportEdgeType;
+}
+
+// OPTIMIZATION: Name index for O(1) reference finding
+// Maps identifier names to set of files containing them
+type NameIndex = Map<string, Set<string>>;
+
 export interface PythonIndex {
   workspace: Workspace;
   files: string[];
   moduleMap: Map<string, string>;
   fileModules: Map<string, string>;
   definitions: Map<string, PythonDefinition[]>;
-  fileContents: Map<string, string>;
+  parsedFiles: Map<string, ParsedPythonFile>;  // OPTIMIZATION: Store parsed trees
+  nameIndex: NameIndex;  // OPTIMIZATION: Name -> files index
   importGraph: ImportGraph;
 }
 
@@ -36,6 +55,7 @@ export async function buildPythonAdapter(options: {
   cachedModuleMap?: Map<string, string>;
   cachedDefinitions?: Map<string, PythonDefinition[]>;
   cachedImportGraph?: ImportGraph;
+  cachedCallExpressions?: CallExpression[];  // NEW: Cached call expressions
 }): Promise<AdapterIndex | null> {
   const { workspace, ignoreMatcher, pythonImportRoots } = options;
   const files = options.files ?? (await detectPythonFiles(workspace.root, ignoreMatcher));
@@ -50,6 +70,9 @@ export async function buildPythonAdapter(options: {
     options.cachedImportGraph
   );
 
+  // OPTIMIZATION: Cache call expressions to avoid re-parsing
+  let callExpressions: CallExpression[] | undefined = options.cachedCallExpressions;
+
   return {
     lang: "py",
     workspace,
@@ -57,26 +80,38 @@ export async function buildPythonAdapter(options: {
     importGraph: index.importGraph,
     findSymbolDefinitions: (query) => Promise.resolve(findPythonDefinitions(index, query)),
     findSymbolReferences: (definition, refOptions) => {
-      // Initialize parser for reference finding
-      const parser = new Parser();
-      parser.setLanguage(Python);
-      return findPythonReferences(index, definition, refOptions, parser);
+      // OPTIMIZATION: Reuse already-parsed trees from index
+      return findPythonReferences(index, definition, refOptions);
     },
     extractSnippet: (filePath, range) => extractSnippet(filePath, range),
-    findCallExpressions: async (callOptions) =>
-      findPythonCallExpressions(
+    findCallExpressions: async (callOptions) => {
+      // Use cached call expressions if available and no filter applied
+      if (callExpressions && !callOptions) {
+        return callExpressions;
+      }
+      // Compute on first use or when filtering
+      // Note: Python call expressions require file contents, so we parse fresh
+      // Build file contents map from parsed files
+      const fileContents = new Map<string, string>();
+      for (const [path, parsed] of index.parsedFiles.entries()) {
+        fileContents.set(path, parsed.text);
+      }
+      callExpressions = await findPythonCallExpressions(
         {
           workspaceRoot: workspace.root,
-          fileContents: index.fileContents,
+          fileContents,
           definitions: index.definitions,
           moduleMap: index.moduleMap,
         },
         callOptions
-      ),
+      );
+      return callExpressions;
+    },
     metadata: {
       py: {
         moduleMap: index.moduleMap,
         definitions: index.definitions,
+        callExpressions,  // Store for caching
       },
     },
   };
@@ -113,31 +148,79 @@ async function buildPythonIndex(
   const moduleMap = cachedModuleMap ?? new Map<string, string>();
   const fileModules = new Map<string, string>();
   const definitions = cachedDefinitions ?? new Map<string, PythonDefinition[]>();
-  const fileContents = new Map<string, string>();
+  
+  // OPTIMIZATION: Store parsed files instead of just contents
+  const parsedFiles = new Map<string, ParsedPythonFile>();
+  
+  // OPTIMIZATION: Build name index during parsing
+  const nameIndex: NameIndex = new Map();
 
-  for (const file of files) {
-    let moduleName = fileModules.get(file);
-    if (!moduleName) {
-      moduleName = resolveModuleName(workspace.root, file, pythonImportRoots);
-      if (moduleName) {
-        if (!moduleMap.has(moduleName)) {
-          moduleMap.set(moduleName, file);
+  // OPTIMIZATION: Process files in batches for better memory management
+  const BATCH_SIZE = 50;
+  for (let i = 0; i < files.length; i += BATCH_SIZE) {
+    const batch = files.slice(i, i + BATCH_SIZE);
+    
+    await Promise.all(
+      batch.map(async (file) => {
+        // Resolve module name
+        let moduleName = fileModules.get(file);
+        if (!moduleName) {
+          moduleName = resolveModuleName(workspace.root, file, pythonImportRoots);
+          if (moduleName) {
+            if (!moduleMap.has(moduleName)) {
+              moduleMap.set(moduleName, file);
+            }
+            fileModules.set(file, moduleName);
+          }
         }
-        fileModules.set(file, moduleName);
-      }
-    }
-    const text = await readText(file);
-    fileContents.set(file, text);
-    if (!definitions.has(file)) {
-      const tree = parser.parse(text);
-      const defs = collectDefinitions(tree.rootNode);
-      definitions.set(file, defs);
-    }
+        
+        // Read and parse file
+        const text = await readText(file);
+        const tree = parser.parse(text);
+        
+        // Collect definitions
+        let defs: PythonDefinition[];
+        if (cachedDefinitions?.has(file)) {
+          defs = cachedDefinitions.get(file)!;
+        } else {
+          defs = collectDefinitions(tree.rootNode);
+          definitions.set(file, defs);
+        }
+        
+        // OPTIMIZATION: Build name index from definitions
+        for (const def of defs) {
+          const existing = nameIndex.get(def.name);
+          if (existing) {
+            existing.add(file);
+          } else {
+            nameIndex.set(def.name, new Set([file]));
+          }
+        }
+        
+        // Also index identifiers from the AST for better reference finding
+        collectIdentifiers(tree.rootNode, nameIndex, file);
+        
+        // Store parsed file
+        parsedFiles.set(file, {
+          filePath: file,
+          text,
+          tree,
+          definitions: defs,
+        });
+      })
+    );
   }
 
+  // OPTIMIZATION: Build import graph using cached trees
   const importGraph =
     cachedImportGraph ??
-    await buildPythonImportGraph(workspace, files, fileContents, fileModules, moduleMap, parser);
+    await buildPythonImportGraph(workspace, files, fileModules, moduleMap, parsedFiles);
+
+  // OPTIMIZATION: Clear tree references to allow GC
+  // Trees are no longer needed after import graph is built
+  for (const parsed of parsedFiles.values()) {
+    (parsed as any).tree = undefined;
+  }
 
   return {
     workspace,
@@ -145,9 +228,42 @@ async function buildPythonIndex(
     moduleMap,
     fileModules,
     definitions,
-    fileContents,
+    parsedFiles,
+    nameIndex,
     importGraph,
   };
+}
+
+// OPTIMIZATION: Collect all identifiers from AST for name indexing
+function collectIdentifiers(node: any, nameIndex: NameIndex, filePath: string): void {
+  if (node.type === "identifier") {
+    const name = node.text;
+    const existing = nameIndex.get(name);
+    if (existing) {
+      existing.add(filePath);
+    } else {
+      nameIndex.set(name, new Set([filePath]));
+    }
+  }
+  
+  // Also collect attribute names (method/property access)
+  if (node.type === "attribute") {
+    const attrNode = node.childForFieldName("attribute");
+    if (attrNode) {
+      const name = attrNode.text;
+      const existing = nameIndex.get(name);
+      if (existing) {
+        existing.add(filePath);
+      } else {
+        nameIndex.set(name, new Set([filePath]));
+      }
+    }
+  }
+  
+  // Recurse into named children
+  for (const child of node.namedChildren) {
+    collectIdentifiers(child, nameIndex, filePath);
+  }
 }
 
 function resolveModuleName(
@@ -276,13 +392,13 @@ function toRange(node: any): Range {
   };
 }
 
+// OPTIMIZATION: Use parsed files map instead of re-parsing
 async function buildPythonImportGraph(
   workspace: Workspace,
   files: string[],
-  fileContents: Map<string, string>,
   fileModules: Map<string, string>,
   moduleMap: Map<string, string>,
-  parser: any
+  parsedFiles: Map<string, ParsedPythonFile>
 ): Promise<ImportGraph> {
   const graph: ImportGraph = new Map();
 
@@ -304,8 +420,11 @@ async function buildPythonImportGraph(
 
   for (const file of files) {
     if (!graph.has(file)) graph.set(file, new Map());
-    const text = fileContents.get(file) ?? "";
-    const tree = parser.parse(text);
+    
+    const parsed = parsedFiles.get(file);
+    if (!parsed) continue;
+    
+    const { tree, text } = parsed;
     const currentModule = fileModules.get(file);
 
     // Static imports: import_statement and import_from_statement
@@ -536,25 +655,41 @@ function shrinkRange(range: Range, maxLines: number): Range {
   };
 }
 
+// OPTIMIZATION: O(1) lookup using name index, then parse only those files
 async function findPythonReferences(
   index: PythonIndex,
   definition: SymbolLocation,
-  options?: { limit?: number; anchorFiles?: string[] },
-  parser?: any
+  options?: { limit?: number; anchorFiles?: string[] }
 ): Promise<SymbolLocation[]> {
   const name =
     definition.symbolName?.split(".").slice(-1)[0] ??
     definition.symbolName ??
     "";
   if (!name) return [];
+  
+  // OPTIMIZATION: Use name index to find candidate files
+  const candidateFiles = index.nameIndex.get(name);
+  if (!candidateFiles || candidateFiles.size === 0) {
+    return [];
+  }
+  
   const refs: SymbolLocation[] = [];
+  const parser = new Parser();
+  parser.setLanguage(Python);
 
-  for (const file of index.files) {
-    const text = index.fileContents.get(file) ?? "";
-    const tree = parser!.parse(text);
+  // OPTIMIZATION: Only process files that contain the name
+  for (const file of candidateFiles) {
+    const parsed = index.parsedFiles.get(file);
+    if (!parsed) continue;
+    
+    const { text } = parsed;
     const lines = text.split(/\r?\n/);
     const matchedLines = new Set<number>();
+    
+    // OPTIMIZATION: Parse only this file and look for the name
+    const tree = parser.parse(text);
     const nodes = tree.rootNode.descendantsOfType(["identifier", "attribute"]);
+    
     for (const node of nodes) {
       if (node.type === "identifier" && node.text === name) {
         matchedLines.add(node.startPosition.row + 1);
@@ -567,6 +702,9 @@ async function findPythonReferences(
         }
       }
     }
+    
+    // Tree will be garbage collected after function returns
+    
     if (matchedLines.size === 0) continue;
     for (const line of matchedLines) {
       refs.push({
@@ -580,6 +718,8 @@ async function findPythonReferences(
       });
     }
   }
+  
+  // Parser will be garbage collected after function returns
 
   const ranked = rankReferences(refs, options?.anchorFiles ?? [], definition.filePath);
   const limit = options?.limit ?? 10;

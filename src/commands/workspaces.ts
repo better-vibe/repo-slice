@@ -40,7 +40,7 @@ function parseWorkspacesArgs(argv: string[]): WorkspacesCliArgs {
     const current = argv[i];
 
     if (current === "--help" || current === "-h") {
-      process.stdout.write(renderWorkspacesHelp());
+      process.stdout.write(renderWorkspacesHelp() + "\n");
       process.exit(0);
     }
 

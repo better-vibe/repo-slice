@@ -8,7 +8,7 @@ const rest = args.slice(1);
 
 async function main(): Promise<void> {
   if (!command || command === "--help" || command === "-h") {
-    process.stdout.write(renderHelp());
+    process.stdout.write(renderHelp() + "\n");
     process.exit(0);
   }
 
@@ -32,7 +32,7 @@ async function main(): Promise<void> {
       return;
     default:
       process.stderr.write(`Unknown command: ${command}\n`);
-      process.stderr.write(renderHelp());
+      process.stderr.write(renderHelp() + "\n");
       process.exit(3);
   }
 }

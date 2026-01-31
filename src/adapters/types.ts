@@ -48,10 +48,22 @@ export interface CallExpression {
   isDynamic: boolean;
 }
 
+export interface IncrementalStats {
+  totalFiles: number;
+  changedFiles: number;
+  reusedFiles: number;
+}
+
 export interface AdapterMetadata {
   py?: {
     moduleMap: Map<string, string>;
     definitions: Map<string, PythonDefinition[]>;
+    callExpressions?: CallExpression[];  // For caching
+  };
+  ts?: {
+    callExpressions?: CallExpression[];  // For caching
+    isIncremental?: boolean;  // Whether incremental parsing was used
+    incrementalStats?: IncrementalStats;  // Stats for debugging
   };
 }
 

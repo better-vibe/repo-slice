@@ -1,4 +1,4 @@
-import type { ImportEdgeType, Range } from "../adapters/types.js";
+import type { ImportEdgeType, Range, CallExpression } from "../adapters/types.js";
 
 export interface FileStat {
   path: string;
@@ -12,6 +12,19 @@ export interface PythonDefinitionCache {
   range: Range;
   className?: string;
   classRange?: Range;
+}
+
+/**
+ * Serialized call expression format.
+ * Stored in cache to avoid re-parsing for call graph generation.
+ */
+export interface SerializedCallExpression {
+  callerFile: string;
+  callerSymbol?: string;
+  calleeSymbol: string;
+  range: Range;
+  confidence: number;
+  isDynamic: boolean;
 }
 
 /**
@@ -33,10 +46,12 @@ export interface WorkspaceCache {
   files: FileStat[];
   ts?: {
     importGraph: SerializedImportGraph | LegacySerializedImportGraph;
+    callExpressions?: SerializedCallExpression[];  // NEW: Cached call expressions
   };
   py?: {
     moduleMap: Record<string, string>;
     definitions: Record<string, PythonDefinitionCache[]>;
     importGraph: SerializedImportGraph | LegacySerializedImportGraph;
+    callExpressions?: SerializedCallExpression[];  // NEW: Cached call expressions
   };
 }
