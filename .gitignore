@@ -22,3 +22,6 @@ coverage/
 # Temporary
 *.tmp
 *.temp
+
+# Benchmark baselines (local only)
+benchmarks/.baselines/
