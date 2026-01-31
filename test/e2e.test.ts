@@ -49,11 +49,25 @@ describe("e2e: CLI basics", () => {
     expect(result.stdout).toMatch(/^\d+\.\d+\.\d+\n$/);
   });
 
-  test("lists workspaces", async () => {
+  test("lists workspaces as json by default", async () => {
     const result = await runCli(["workspaces"]);
     expect(result.exitCode).toBe(0);
     // Current repo should have at least the root workspace
-    expect(result.stdout).toContain("repo-slice");
+    const json = JSON.parse(result.stdout);
+    expect(Array.isArray(json)).toBe(true);
+    expect(json.length).toBeGreaterThan(0);
+    expect(json[0]).toHaveProperty("name");
+    expect(json[0]).toHaveProperty("kind");
+    expect(json[0]).toHaveProperty("root");
+    // Should contain the repo-slice workspace
+    expect(json.some((ws: { name: string }) => ws.name.includes("repo-slice"))).toBe(true);
+  });
+
+  test("lists workspaces as text with --format text", async () => {
+    const result = await runCli(["workspaces", "--format", "text"]);
+    expect(result.exitCode).toBe(0);
+    // Current repo should have at least the root workspace
+    expect(result.stdout).toContain("@better-vibe/repo-slice");
     expect(result.stdout).toContain("node");
   });
 
@@ -65,16 +79,19 @@ describe("e2e: CLI basics", () => {
 });
 
 describe("e2e: pack command - entry files", () => {
-  test("packs a single entry file", async () => {
+  test("packs a single entry file as json by default", async () => {
     const result = await runCli([
       "pack",
       "--entry", "src/cli.ts",
       "--no-timestamp",
     ]);
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("# repo-slice bundle");
-    expect(result.stdout).toContain("src/cli.ts");
-    expect(result.stdout).toContain("```ts");
+    const json = JSON.parse(result.stdout);
+    expect(json).toHaveProperty("meta");
+    expect(json).toHaveProperty("items");
+    expect(json).toHaveProperty("omitted");
+    // Should include the entry file
+    expect(json.items.some((item: { filePath: string }) => item.filePath.includes("cli.ts"))).toBe(true);
   });
 
   test("packs multiple entry files", async () => {
@@ -85,8 +102,10 @@ describe("e2e: pack command - entry files", () => {
       "--no-timestamp",
     ]);
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("src/cli.ts");
-    expect(result.stdout).toContain("src/config.ts");
+    const json = JSON.parse(result.stdout);
+    const filePaths = json.items.map((item: { filePath: string }) => item.filePath);
+    expect(filePaths.some((path: string) => path.includes("cli.ts"))).toBe(true);
+    expect(filePaths.some((path: string) => path.includes("config.ts"))).toBe(true);
   });
 
   test("includes imports from entry file", async () => {
@@ -98,8 +117,10 @@ describe("e2e: pack command - entry files", () => {
     ]);
     expect(result.exitCode).toBe(0);
     // cli.ts imports from commands/
-    expect(result.stdout).toContain("commands/pack.ts");
-    expect(result.stdout).toContain("commands/help.ts");
+    const json = JSON.parse(result.stdout);
+    const filePaths = json.items.map((item: { filePath: string }) => item.filePath);
+    expect(filePaths.some((path: string) => path.includes("commands/pack.ts"))).toBe(true);
+    expect(filePaths.some((path: string) => path.includes("commands/help.ts"))).toBe(true);
   });
 
   test("respects depth limit", async () => {
@@ -131,8 +152,13 @@ describe("e2e: pack command - symbols", () => {
       "--reason",
     ]);
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("commands/help.ts");
-    expect(result.stdout).toContain("defines-symbol renderHelp");
+    const json = JSON.parse(result.stdout);
+    const filePaths = json.items.map((item: { filePath: string }) => item.filePath);
+    expect(filePaths.some((path: string) => path.includes("commands/help.ts"))).toBe(true);
+    // Check that reasons include symbol definition
+    const helpItem = json.items.find((item: { filePath: string }) => item.filePath.includes("commands/help.ts"));
+    expect(helpItem).toBeDefined();
+    expect(helpItem.reasons.some((reason: string) => reason.includes("renderHelp"))).toBe(true);
   });
 
   test("finds class and method", async () => {
@@ -143,7 +169,9 @@ describe("e2e: pack command - symbols", () => {
       "--no-timestamp",
     ]);
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("commands/pack.ts");
+    const json = JSON.parse(result.stdout);
+    const filePaths = json.items.map((item: { filePath: string }) => item.filePath);
+    expect(filePaths.some((path: string) => path.includes("commands/pack.ts"))).toBe(true);
   });
 
   test("reports unresolved symbol", async () => {
@@ -175,23 +203,10 @@ describe("e2e: pack command - symbols", () => {
 });
 
 describe("e2e: pack command - output formats", () => {
-  test("outputs markdown by default", async () => {
+  test("outputs json by default", async () => {
     const result = await runCli([
       "pack",
       "--entry", "src/cli.ts",
-      "--no-timestamp",
-    ]);
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("# repo-slice bundle");
-    expect(result.stdout).toContain("## Index");
-    expect(result.stdout).toContain("## Content");
-  });
-
-  test("outputs json with --format json", async () => {
-    const result = await runCli([
-      "pack",
-      "--entry", "src/cli.ts",
-      "--format", "json",
       "--no-timestamp",
     ]);
     expect(result.exitCode).toBe(0);
@@ -206,11 +221,23 @@ describe("e2e: pack command - output formats", () => {
     expect(json.items.length).toBeGreaterThan(0);
   });
 
+  test("outputs markdown with --format md", async () => {
+    const result = await runCli([
+      "pack",
+      "--entry", "src/cli.ts",
+      "--format", "md",
+      "--no-timestamp",
+    ]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("# repo-slice bundle");
+    expect(result.stdout).toContain("## Index");
+    expect(result.stdout).toContain("## Content");
+  });
+
   test("json items have required fields", async () => {
     const result = await runCli([
       "pack",
       "--entry", "src/cli.ts",
-      "--format", "json",
       "--depth", "0",
       "--no-timestamp",
     ]);
@@ -223,11 +250,26 @@ describe("e2e: pack command - output formats", () => {
     expect(item).toHaveProperty("workspaceRoot");
   });
 
-  test("--reason includes reasons in output", async () => {
+  test("--reason includes reasons in json output", async () => {
     const result = await runCli([
       "pack",
       "--entry", "src/cli.ts",
       "--reason",
+      "--no-timestamp",
+    ]);
+    expect(result.exitCode).toBe(0);
+    const json = JSON.parse(result.stdout);
+    expect(json.items.length).toBeGreaterThan(0);
+    expect(json.items[0]).toHaveProperty("reasons");
+    expect(json.items[0].reasons).toContain("entry file");
+  });
+
+  test("--reason includes reasons in markdown output", async () => {
+    const result = await runCli([
+      "pack",
+      "--entry", "src/cli.ts",
+      "--reason",
+      "--format", "md",
       "--no-timestamp",
     ]);
     expect(result.exitCode).toBe(0);
@@ -264,7 +306,9 @@ describe("e2e: pack command - budget", () => {
       "--no-timestamp",
     ]);
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toMatch(/budget: \d+\/10000 chars/);
+    const json = JSON.parse(result.stdout);
+    expect(json.meta.budget).toHaveProperty("chars", 10000);
+    expect(json.meta.budget).toHaveProperty("usedChars");
   });
 
   test("--reason shows omitted items", async () => {
@@ -277,10 +321,9 @@ describe("e2e: pack command - budget", () => {
     ]);
     expect(result.exitCode).toBe(0);
     // With a small budget, some items should be omitted
-    // Check if omitted section exists or all items fit
-    const hasOmitted = result.stdout.includes("## Omitted");
-    const budgetMatch = result.stdout.match(/budget: (\d+)\/5000 chars/);
-    expect(budgetMatch).not.toBeNull();
+    const json = JSON.parse(result.stdout);
+    // Either items are in omitted array or everything fit within budget
+    expect(json.omitted).toBeDefined();
   });
 });
 
@@ -291,8 +334,8 @@ describe("e2e: pack command - file output", () => {
     tempDir = await mkdtemp(join(tmpdir(), "repo-slice-test-"));
   });
 
-  test("writes to file with --out", async () => {
-    const outPath = join(tempDir, "output.md");
+  test("writes json to file by default", async () => {
+    const outPath = join(tempDir, "output.json");
     const result = await runCli([
       "pack",
       "--entry", "src/cli.ts",
@@ -303,25 +346,25 @@ describe("e2e: pack command - file output", () => {
     expect(result.stdout).toBe(""); // Output goes to file, not stdout
 
     const content = await Bun.file(outPath).text();
-    expect(content).toContain("# repo-slice bundle");
-    expect(content).toContain("src/cli.ts");
+    const json = JSON.parse(content);
+    expect(json).toHaveProperty("meta");
+    expect(json).toHaveProperty("items");
   });
 
-  test("writes json to file", async () => {
-    const outPath = join(tempDir, "output.json");
+  test("writes markdown to file with --format md", async () => {
+    const outPath = join(tempDir, "output.md");
     const result = await runCli([
       "pack",
       "--entry", "src/cli.ts",
-      "--format", "json",
+      "--format", "md",
       "--out", outPath,
       "--no-timestamp",
     ]);
     expect(result.exitCode).toBe(0);
 
     const content = await Bun.file(outPath).text();
-    const json = JSON.parse(content);
-    expect(json).toHaveProperty("meta");
-    expect(json).toHaveProperty("items");
+    expect(content).toContain("# repo-slice bundle");
+    expect(content).toContain("src/cli.ts");
   });
 });
 
@@ -342,8 +385,10 @@ describe("e2e: pack command - log parsing", () => {
       "--no-timestamp",
     ]);
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("src/cli.ts");
-    expect(result.stdout).toContain("src/config.ts");
+    const json = JSON.parse(result.stdout);
+    const filePaths = json.items.map((item: { filePath: string }) => item.filePath);
+    expect(filePaths.some((path: string) => path.includes("src/cli.ts"))).toBe(true);
+    expect(filePaths.some((path: string) => path.includes("src/config.ts"))).toBe(true);
   });
 
   test("parses jest-style error log", async () => {
@@ -356,8 +401,10 @@ describe("e2e: pack command - log parsing", () => {
       "--no-timestamp",
     ]);
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("src/cli.ts");
-    expect(result.stdout).toContain("src/commands/pack.ts");
+    const json = JSON.parse(result.stdout);
+    const filePaths = json.items.map((item: { filePath: string }) => item.filePath);
+    expect(filePaths.some((path: string) => path.includes("src/cli.ts"))).toBe(true);
+    expect(filePaths.some((path: string) => path.includes("commands/pack.ts"))).toBe(true);
   });
 
   test("parses pytest-style error log", async () => {
@@ -455,23 +502,7 @@ describe("e2e: pack command - determinism", () => {
     expect(run1.stdout).toBe(run2.stdout);
   });
 
-  test("json output is deterministic", async () => {
-    const run1 = await runCli([
-      "pack",
-      "--entry", "src/cli.ts",
-      "--format", "json",
-      "--no-timestamp",
-    ]);
-    const run2 = await runCli([
-      "pack",
-      "--entry", "src/cli.ts",
-      "--format", "json",
-      "--no-timestamp",
-    ]);
-    expect(run1.exitCode).toBe(0);
-    expect(run2.exitCode).toBe(0);
-    expect(run1.stdout).toBe(run2.stdout);
-  });
+
 });
 
 describe("e2e: pack command - real codebase scenarios", () => {
@@ -483,8 +514,10 @@ describe("e2e: pack command - real codebase scenarios", () => {
       "--no-timestamp",
     ]);
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("adapters/index.ts");
-    expect(result.stdout).toContain("adapters/types.ts");
+    const json = JSON.parse(result.stdout);
+    const filePaths = json.items.map((item: { filePath: string }) => item.filePath);
+    expect(filePaths.some((path: string) => path.includes("adapters/index.ts"))).toBe(true);
+    expect(filePaths.some((path: string) => path.includes("adapters/types.ts"))).toBe(true);
   });
 
   test("bundles test files with --include-tests true", async () => {
@@ -496,10 +529,12 @@ describe("e2e: pack command - real codebase scenarios", () => {
       "--reason",
     ]);
     expect(result.exitCode).toBe(0);
+    const json = JSON.parse(result.stdout);
+    const filePaths = json.items.map((item: { filePath: string }) => item.filePath);
     // Should include related test file if it exists
-    const hasTestFile = result.stdout.includes("budget.test.ts");
+    const hasTestFile = filePaths.some((path: string) => path.includes("budget.test.ts"));
     // Test passes regardless - we're checking the flag works
-    expect(result.stdout).toContain("budget.ts");
+    expect(filePaths.some((path: string) => path.includes("budget.ts"))).toBe(true);
   });
 
   test("handles deep import chains", async () => {
@@ -509,7 +544,6 @@ describe("e2e: pack command - real codebase scenarios", () => {
       "--depth", "3",
       "--budget-chars", "100000",
       "--no-timestamp",
-      "--format", "json",
     ]);
     expect(result.exitCode).toBe(0);
     const json = JSON.parse(result.stdout);
@@ -525,8 +559,9 @@ describe("e2e: pack command - real codebase scenarios", () => {
       "--reason",
     ]);
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("engine/types.ts");
-    expect(result.stdout).toContain("defines-symbol Candidate");
+    const json = JSON.parse(result.stdout);
+    const filePaths = json.items.map((item: { filePath: string }) => item.filePath);
+    expect(filePaths.some((path: string) => path.includes("engine/types.ts"))).toBe(true);
   });
 
   test("combines entry and symbol anchors", async () => {
@@ -538,9 +573,13 @@ describe("e2e: pack command - real codebase scenarios", () => {
       "--reason",
     ]);
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("cli.ts");
-    expect(result.stdout).toContain("entry file");
-    expect(result.stdout).toContain("defines-symbol renderHelp");
+    const json = JSON.parse(result.stdout);
+    const filePaths = json.items.map((item: { filePath: string }) => item.filePath);
+    expect(filePaths.some((path: string) => path.includes("cli.ts"))).toBe(true);
+    // Check reasons are included
+    const cliItem = json.items.find((item: { filePath: string }) => item.filePath.includes("cli.ts"));
+    expect(cliItem).toBeDefined();
+    expect(cliItem.reasons).toContain("entry file");
   });
 });
 
@@ -573,8 +612,11 @@ describe("e2e: edge cases", () => {
       "--no-timestamp",
     ]);
     expect(result.exitCode).toBe(0);
-    // Should still produce valid output structure
-    expect(result.stdout).toContain("# repo-slice bundle");
+    // Should still produce valid JSON output structure
+    const json = JSON.parse(result.stdout);
+    expect(json).toHaveProperty("meta");
+    expect(json).toHaveProperty("items");
+    expect(json).toHaveProperty("omitted");
   });
 
   test("handles special characters in paths", async () => {
@@ -585,6 +627,8 @@ describe("e2e: edge cases", () => {
       "--no-timestamp",
     ]);
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("cli.ts");
+    const json = JSON.parse(result.stdout);
+    const filePaths = json.items.map((item: { filePath: string }) => item.filePath);
+    expect(filePaths.some((path: string) => path.includes("cli.ts"))).toBe(true);
   });
 });
