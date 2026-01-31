@@ -52,6 +52,10 @@ export interface AdapterMetadata {
   py?: {
     moduleMap: Map<string, string>;
     definitions: Map<string, PythonDefinition[]>;
+    callExpressions?: CallExpression[];  // For caching
+  };
+  ts?: {
+    callExpressions?: CallExpression[];  // For caching
   };
 }
 

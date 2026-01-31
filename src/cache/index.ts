@@ -2,8 +2,8 @@ import { join } from "node:path";
 import { readFile, writeFile, mkdir, stat } from "node:fs/promises";
 import { fileExists } from "../utils/fs.js";
 import { sha1 } from "../utils/hash.js";
-import type { FileStat, SerializedImportGraph, LegacySerializedImportGraph, WorkspaceCache } from "./types.js";
-import type { ImportGraph, ImportEdgeType } from "../adapters/types.js";
+import type { FileStat, SerializedImportGraph, LegacySerializedImportGraph, WorkspaceCache, SerializedCallExpression } from "./types.js";
+import type { ImportGraph, ImportEdgeType, CallExpression } from "../adapters/types.js";
 
 export async function loadWorkspaceCache(options: {
   repoRoot: string;
@@ -100,19 +100,62 @@ export function deserializeImportGraph(record: SerializedImportGraph | LegacySer
   return graph;
 }
 
+/**
+ * OPTIMIZATION: Batch file stat operations for better performance
+ * Processes files in parallel batches to reduce I/O wait time
+ */
 export async function collectFileStats(files: string[]): Promise<FileStat[]> {
+  const BATCH_SIZE = 50;  // Process 50 files at a time
   const stats: FileStat[] = [];
-  for (const file of files) {
-    try {
-      const info = await stat(file);
-      stats.push({
-        path: file,
-        mtimeMs: info.mtimeMs,
-        size: info.size,
-      });
-    } catch {
-      continue;
-    }
+  
+  for (let i = 0; i < files.length; i += BATCH_SIZE) {
+    const batch = files.slice(i, i + BATCH_SIZE);
+    const batchStats = await Promise.all(
+      batch.map(async (file) => {
+        try {
+          const info = await stat(file);
+          return {
+            path: file,
+            mtimeMs: info.mtimeMs,
+            size: info.size,
+          };
+        } catch {
+          return null;
+        }
+      })
+    );
+    stats.push(...batchStats.filter((s): s is FileStat => s !== null));
   }
+  
   return stats;
+}
+
+/**
+ * Serialize call expressions for caching.
+ * Converts CallExpression array to serializable format.
+ */
+export function serializeCallExpressions(calls: CallExpression[]): SerializedCallExpression[] {
+  return calls.map((call) => ({
+    callerFile: call.callerFile,
+    callerSymbol: call.callerSymbol,
+    calleeSymbol: call.calleeSymbol,
+    range: call.range,
+    confidence: call.confidence,
+    isDynamic: call.isDynamic,
+  }));
+}
+
+/**
+ * Deserialize call expressions from cache.
+ * Converts serialized format back to CallExpression array.
+ */
+export function deserializeCallExpressions(calls: SerializedCallExpression[]): CallExpression[] {
+  return calls.map((call) => ({
+    callerFile: call.callerFile,
+    callerSymbol: call.callerSymbol,
+    calleeSymbol: call.calleeSymbol,
+    range: call.range,
+    confidence: call.confidence,
+    isDynamic: call.isDynamic,
+  }));
 }

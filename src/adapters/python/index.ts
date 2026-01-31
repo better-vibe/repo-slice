@@ -55,6 +55,7 @@ export async function buildPythonAdapter(options: {
   cachedModuleMap?: Map<string, string>;
   cachedDefinitions?: Map<string, PythonDefinition[]>;
   cachedImportGraph?: ImportGraph;
+  cachedCallExpressions?: CallExpression[];  // NEW: Cached call expressions
 }): Promise<AdapterIndex | null> {
   const { workspace, ignoreMatcher, pythonImportRoots } = options;
   const files = options.files ?? (await detectPythonFiles(workspace.root, ignoreMatcher));
@@ -69,6 +70,9 @@ export async function buildPythonAdapter(options: {
     options.cachedImportGraph
   );
 
+  // OPTIMIZATION: Cache call expressions to avoid re-parsing
+  let callExpressions: CallExpression[] | undefined = options.cachedCallExpressions;
+
   return {
     lang: "py",
     workspace,
@@ -80,22 +84,34 @@ export async function buildPythonAdapter(options: {
       return findPythonReferences(index, definition, refOptions);
     },
     extractSnippet: (filePath, range) => extractSnippet(filePath, range),
-    findCallExpressions: async (callOptions) =>
-      findPythonCallExpressions(
+    findCallExpressions: async (callOptions) => {
+      // Use cached call expressions if available and no filter applied
+      if (callExpressions && !callOptions) {
+        return callExpressions;
+      }
+      // Compute on first use or when filtering
+      // Note: Python call expressions require file contents, so we parse fresh
+      // Build file contents map from parsed files
+      const fileContents = new Map<string, string>();
+      for (const [path, parsed] of index.parsedFiles.entries()) {
+        fileContents.set(path, parsed.text);
+      }
+      callExpressions = await findPythonCallExpressions(
         {
           workspaceRoot: workspace.root,
-          // OPTIMIZATION: Only provide file contents for files that have call expressions
-          // This reduces memory compared to storing all file contents
-          fileContents: new Map(),
+          fileContents,
           definitions: index.definitions,
           moduleMap: index.moduleMap,
         },
         callOptions
-      ),
+      );
+      return callExpressions;
+    },
     metadata: {
       py: {
         moduleMap: index.moduleMap,
         definitions: index.definitions,
+        callExpressions,  // Store for caching
       },
     },
   };

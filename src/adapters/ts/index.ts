@@ -16,6 +16,7 @@ export async function buildTsAdapter(options: {
   ignoreMatcher: IgnoreMatcher;
   files?: string[];
   cachedImportGraph?: ImportGraph;
+  cachedCallExpressions?: CallExpression[];  // NEW: Cached call expressions
 }): Promise<AdapterIndex | null> {
   const { workspace, ignoreMatcher } = options;
   const tsFiles =
@@ -30,6 +31,9 @@ export async function buildTsAdapter(options: {
     options.cachedImportGraph ??
     buildImportGraph(program, compilerOptions, workspace.root);
 
+  // OPTIMIZATION: Cache call expressions to avoid re-parsing
+  let callExpressions: CallExpression[] | undefined = options.cachedCallExpressions;
+
   return {
     lang: "ts",
     workspace,
@@ -40,8 +44,22 @@ export async function buildTsAdapter(options: {
     findSymbolReferences: (definition, refOptions) =>
       findTsReferences(languageService, definition, refOptions),
     extractSnippet: (filePath, range) => extractSnippet(filePath, range),
-    findCallExpressions: async (callOptions) =>
-      Promise.resolve(findTsCallExpressions(program, workspace.root, callOptions)),
+    findCallExpressions: async (callOptions) => {
+      // Use cached call expressions if available and no filter applied
+      if (callExpressions && !callOptions) {
+        return callExpressions;
+      }
+      // Compute on first use or when filtering
+      if (!callExpressions) {
+        callExpressions = findTsCallExpressions(program, workspace.root, callOptions);
+      }
+      return callExpressions;
+    },
+    metadata: {
+      ts: {
+        callExpressions,  // Store for caching
+      },
+    },
   };
 }
 

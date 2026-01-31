@@ -39,6 +39,8 @@ import {
   loadWorkspaceCache,
   saveWorkspaceCache,
   serializeImportGraph,
+  serializeCallExpressions,
+  deserializeCallExpressions,
 } from "../cache/index.js";
 import type { WorkspaceCache } from "../cache/types.js";
 import { sha1 } from "../utils/hash.js";
@@ -469,11 +471,19 @@ async function getPackageVersion(repoRoot: string): Promise<string> {
 function toAdapterCache(cache: WorkspaceCache): AdapterCacheData {
   return {
     tsImportGraph: cache.ts ? deserializeImportGraph(cache.ts.importGraph) : undefined,
+    // NEW: Deserialize cached call expressions if available
+    tsCallExpressions: cache.ts?.callExpressions
+      ? deserializeCallExpressions(cache.ts.callExpressions)
+      : undefined,
     pyModuleMap: cache.py ? new Map(Object.entries(cache.py.moduleMap)) : undefined,
     pyDefinitions: cache.py
       ? new Map(Object.entries(cache.py.definitions))
       : undefined,
     pyImportGraph: cache.py ? deserializeImportGraph(cache.py.importGraph) : undefined,
+    // NEW: Deserialize cached call expressions if available
+    pyCallExpressions: cache.py?.callExpressions
+      ? deserializeCallExpressions(cache.py.callExpressions)
+      : undefined,
   };
 }
 
@@ -488,6 +498,7 @@ function buildWorkspaceCache(options: {
   const tsAdapter = options.adapters.find((adapter) => adapter.lang === "ts");
   const pyAdapter = options.adapters.find((adapter) => adapter.lang === "py");
   const pyMeta = pyAdapter?.metadata?.py;
+  const tsMeta = tsAdapter?.metadata?.ts;
 
   return {
     version: options.version,
@@ -497,6 +508,10 @@ function buildWorkspaceCache(options: {
     ts: tsAdapter
       ? {
           importGraph: serializeImportGraph(tsAdapter.importGraph),
+          // NEW: Cache call expressions if available
+          callExpressions: tsMeta?.callExpressions
+            ? serializeCallExpressions(tsMeta.callExpressions)
+            : undefined,
         }
       : undefined,
     py: pyAdapter && pyMeta
@@ -504,6 +519,10 @@ function buildWorkspaceCache(options: {
           moduleMap: Object.fromEntries(pyMeta.moduleMap.entries()),
           definitions: Object.fromEntries(pyMeta.definitions.entries()),
           importGraph: serializeImportGraph(pyAdapter.importGraph),
+          // NEW: Cache call expressions if available
+          callExpressions: pyMeta?.callExpressions
+            ? serializeCallExpressions(pyMeta.callExpressions)
+            : undefined,
         }
       : undefined,
   };
