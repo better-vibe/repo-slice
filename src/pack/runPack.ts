@@ -294,54 +294,71 @@ async function buildAdapters(options: {
   args: PackCliArgs;
   logger: { debug: (message: string) => void };
 }) {
-  const adapters: Awaited<ReturnType<typeof buildAdaptersForWorkspace>> = [];
   const version = await getPackageVersion(options.repoRoot);
-  for (const workspace of options.workspaces) {
-    const { config } = await loadConfig(options.repoRoot, workspace.root);
-    const effectiveConfig = applyCliOverrides(config, options.args);
-    options.logger.debug(`Indexing workspace ${workspace.root}`);
-    const ignoreMatcher = await createIgnoreMatcher({
-      repoRoot: options.repoRoot,
-      workspaceRoot: workspace.root,
-      extraIgnorePatterns: effectiveConfig.ignore,
-    });
-    const files = await detectWorkspaceFiles(workspace.root, ignoreMatcher);
-    const allFiles = [...files.tsFiles, ...files.pyFiles].sort();
-    const stats = await collectFileStats(allFiles);
-    const configHash = hashWorkspaceConfig(effectiveConfig);
-    const cache = await loadWorkspaceCache({
-      repoRoot: options.repoRoot,
-      workspaceRoot: workspace.root,
-      configHash,
-      version,
-    });
-    const cacheValid = cache ? isCacheValid(cache, stats) : false;
-    const cacheData = cacheValid ? toAdapterCache(cache) : undefined;
-    const workspaceAdapters = await buildAdaptersForWorkspace({
-      workspace,
-      ignoreMatcher,
-      pythonImportRoots: effectiveConfig.workspaces.pythonImportRoots,
-      files,
-      cache: cacheData,
-    });
-    adapters.push(...workspaceAdapters);
-
-    await saveWorkspaceCache({
-      repoRoot: options.repoRoot,
-      workspaceRoot: workspace.root,
-      configHash,
-      version,
-      cache: buildWorkspaceCache({
-        cache,
-        workspace,
-        version,
+  
+  // OPTIMIZATION: Process workspaces in parallel for better performance
+  // Each workspace is independent, so we can build adapters concurrently
+  const workspaceResults = await Promise.all(
+    options.workspaces.map(async (workspace) => {
+      const { config } = await loadConfig(options.repoRoot, workspace.root);
+      const effectiveConfig = applyCliOverrides(config, options.args);
+      options.logger.debug(`Indexing workspace ${workspace.root}`);
+      const ignoreMatcher = await createIgnoreMatcher({
+        repoRoot: options.repoRoot,
+        workspaceRoot: workspace.root,
+        extraIgnorePatterns: effectiveConfig.ignore,
+      });
+      const files = await detectWorkspaceFiles(workspace.root, ignoreMatcher);
+      const allFiles = [...files.tsFiles, ...files.pyFiles].sort();
+      const stats = await collectFileStats(allFiles);
+      const configHash = hashWorkspaceConfig(effectiveConfig);
+      const cache = await loadWorkspaceCache({
+        repoRoot: options.repoRoot,
+        workspaceRoot: workspace.root,
         configHash,
-        stats,
+        version,
+      });
+      const cacheValid = cache ? isCacheValid(cache, stats) : false;
+      const cacheData = cacheValid ? toAdapterCache(cache) : undefined;
+      const workspaceAdapters = await buildAdaptersForWorkspace({
+        workspace,
+        ignoreMatcher,
+        pythonImportRoots: effectiveConfig.workspaces.pythonImportRoots,
+        files,
+        cache: cacheData,
+      });
+
+      // Return cache data separately to save after all workspaces are processed
+      return {
         adapters: workspaceAdapters,
-      }),
-    });
-  }
-  return adapters.flat();
+        cache: {
+          workspace,
+          cache,
+          version,
+          configHash,
+          stats,
+          adapters: workspaceAdapters,
+        },
+      };
+    })
+  );
+
+  // Save all caches after parallel processing
+  // This is safe because each workspace has its own cache file
+  await Promise.all(
+    workspaceResults.map(({ cache }) =>
+      saveWorkspaceCache({
+        repoRoot: options.repoRoot,
+        workspaceRoot: cache.workspace.root,
+        configHash: cache.configHash,
+        version: cache.version,
+        cache: buildWorkspaceCache(cache),
+      })
+    )
+  );
+
+  // Flatten all adapters - order is deterministic based on workspace order
+  return workspaceResults.flatMap((result) => result.adapters);
 }
 
 async function buildIgnoreMatchers(options: {
@@ -349,16 +366,23 @@ async function buildIgnoreMatchers(options: {
   workspaces: Workspace[];
   args: PackCliArgs;
 }): Promise<Map<string, Awaited<ReturnType<typeof createIgnoreMatcher>>>> {
+  // OPTIMIZATION: Load all configs and create ignore matchers in parallel
+  const results = await Promise.all(
+    options.workspaces.map(async (workspace) => {
+      const { config } = await loadConfig(options.repoRoot, workspace.root);
+      const effectiveConfig = applyCliOverrides(config, options.args);
+      const ignoreMatcher = await createIgnoreMatcher({
+        repoRoot: options.repoRoot,
+        workspaceRoot: workspace.root,
+        extraIgnorePatterns: effectiveConfig.ignore,
+      });
+      return { id: workspace.id, matcher: ignoreMatcher };
+    })
+  );
+
   const map = new Map<string, Awaited<ReturnType<typeof createIgnoreMatcher>>>();
-  for (const workspace of options.workspaces) {
-    const { config } = await loadConfig(options.repoRoot, workspace.root);
-    const effectiveConfig = applyCliOverrides(config, options.args);
-    const ignoreMatcher = await createIgnoreMatcher({
-      repoRoot: options.repoRoot,
-      workspaceRoot: workspace.root,
-      extraIgnorePatterns: effectiveConfig.ignore,
-    });
-    map.set(workspace.id, ignoreMatcher);
+  for (const { id, matcher } of results) {
+    map.set(id, matcher);
   }
   return map;
 }
