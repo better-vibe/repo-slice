@@ -1,5 +1,11 @@
 # @better-vibe/repo-slice
 
+## 1.0.2
+
+### Patch Changes
+
+- df3446b: default all commands to json
+
 ## 1.0.1
 
 ### Patch Changes
