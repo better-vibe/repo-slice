@@ -67,11 +67,18 @@ async function saveServiceState(
 
 /**
  * Detect which files changed since last run
+ * OPTIMIZATION: When no previous state exists, skip detection and treat all files as added
  */
 async function detectChangedFiles(
-  previousState: TsServiceState,
-  currentFiles: string[]
+  previousState: TsServiceState | null,
+  currentFiles: string[],
+  currentHashes?: Record<string, string>
 ): Promise<{ changed: string[]; added: string[]; removed: string[]; unchanged: string[] }> {
+  // OPTIMIZATION: On cold start (no previous state), all files are "added"
+  if (!previousState) {
+    return { changed: [], added: currentFiles, removed: [], unchanged: [] };
+  }
+  
   const changed: string[] = [];
   const added: string[] = [];
   const removed: string[] = [];
@@ -95,10 +102,11 @@ async function detectChangedFiles(
   }
   
   // Check for changes in existing files
+  // OPTIMIZATION: Use pre-computed hashes if provided to avoid double I/O
   for (const file of currentFiles) {
     if (!previousSet.has(file)) continue;  // Skip added files
     
-    const currentHash = await computeFileHash(file);
+    const currentHash = currentHashes?.[file] ?? await computeFileHash(file);
     const previousHash = previousState.fileHashes[file];
     
     if (currentHash !== previousHash) {
@@ -160,10 +168,12 @@ export async function createIncrementalProgram(
   // Load previous state
   const previousState = await loadServiceState(cacheDir);
   
-  // Detect file system changes
-  const changes = previousState 
-    ? await detectChangedFiles(previousState, files)
-    : { changed: [], added: files, removed: [], unchanged: [] };
+  // OPTIMIZATION: Compute all hashes once upfront
+  // This avoids double I/O when detecting changes and saving state
+  const currentHashes = await computeAllHashes(files);
+  
+  // Detect file system changes using pre-computed hashes
+  const changes = await detectChangedFiles(previousState, files, currentHashes);
   
   const changedCount = changes.changed.length + changes.added.length;
   const unchangedCount = changes.unchanged.length;
@@ -241,7 +251,7 @@ export async function createIncrementalProgram(
   const languageService = ts.createLanguageService(languageServiceHost);
   
   // Save current state for next run
-  const currentHashes = await computeAllHashes(files);
+  // OPTIMIZATION: Reuse already computed hashes instead of computing again
   const newState: TsServiceState = {
     version: SERVICE_VERSION,
     workspaceRoot,
@@ -270,6 +280,7 @@ export async function createIncrementalProgram(
  * 
  * This is called before building the full adapter to potentially
  * skip all TypeScript work if nothing changed.
+ * OPTIMIZATION: Compute hashes in parallel batches instead of sequentially
  */
 export async function canUseFastPath(
   workspaceRoot: string,
@@ -289,11 +300,21 @@ export async function canUseFastPath(
     if (!fileSet.has(file)) return false;
   }
   
-  // Check hashes
-  for (const file of files) {
-    const currentHash = await computeFileHash(file);
-    if (currentHash !== state.fileHashes[file]) {
-      return false;
+  // OPTIMIZATION: Check hashes in parallel batches instead of sequentially
+  const BATCH_SIZE = 50;
+  for (let i = 0; i < files.length; i += BATCH_SIZE) {
+    const batch = files.slice(i, i + BATCH_SIZE);
+    const batchHashes = await Promise.all(
+      batch.map(async (file) => ({
+        file,
+        hash: await computeFileHash(file),
+      }))
+    );
+    
+    for (const { file, hash } of batchHashes) {
+      if (hash !== state.fileHashes[file]) {
+        return false;
+      }
     }
   }
   

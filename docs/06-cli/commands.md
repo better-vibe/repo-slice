@@ -14,11 +14,45 @@
 
 ## pack
 
-The primary command for generating context bundles. Accepts anchors (entry files, symbols, diffs, logs) and produces a Markdown or JSON output.
+The primary command for generating context bundles. Accepts anchors (entry files, symbols, diffs, logs, folders) and produces a Markdown or JSON output.
+
+### Basic Usage
 
 ```bash
+# Entry file anchor
 repo-slice pack --entry src/index.ts
+
+# Symbol anchor
+repo-slice pack --symbol UserService
+
+# Folder anchor (no import parsing)
+repo-slice pack --folder docs/
 ```
+
+### Folder Packing
+
+The `--folder` option packs all files in a directory without import graph traversal:
+
+```bash
+# Pack documentation
+repo-slice pack --folder docs/
+
+# Pack with size limit (skip files > 5MB)
+repo-slice pack --folder assets/ --folder-max-size 5
+
+# Include hidden files
+repo-slice pack --folder config/ --folder-include-hidden
+
+# Mix with entry files
+repo-slice pack --entry src/app.ts --folder public/
+```
+
+**Folder Packing Behavior:**
+- All files included as-is (text files with content, binary files with metadata)
+- No import graph analysis (different from `--entry`)
+- Respects `.gitignore` patterns
+- Files exceeding `--folder-max-size` listed in omitted section
+- Empty directories explicitly tracked
 
 See [Options](./options.md) for all available flags.
 

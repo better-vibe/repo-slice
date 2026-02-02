@@ -23,6 +23,11 @@ export interface PackCliArgs {
   debug?: boolean;
   debugCache?: boolean;  // NEW: Use JSON cache format for debugging
   noTimestamp?: boolean;
+  // NEW: Folder packing options
+  folders?: string[];
+  folderMaxSizeMB?: number;
+  folderIncludeHidden?: boolean;
+  folderFollowSymlinks?: boolean;
 }
 
 export async function packCommand(argv: string[]): Promise<void> {
@@ -46,10 +51,19 @@ export async function packCommand(argv: string[]): Promise<void> {
     args.entries.length === 0 &&
     args.symbols.length === 0 &&
     !args.fromDiff &&
-    !args.fromLog
+    !args.fromLog &&
+    (!args.folders || args.folders.length === 0)
   ) {
     process.stderr.write("Error: No anchors specified.\n");
-    process.stderr.write("Use --entry, --symbol, --from-diff, or --from-log to specify what to include.\n\n");
+    process.stderr.write("Use --entry, --symbol, --from-diff, --from-log, or --folder to specify what to include.\n\n");
+    process.stderr.write(renderHelp() + "\n");
+    process.exit(3);
+    return;
+  }
+
+  // Validate conflicting workspace flags
+  if (args.workspace && args.allWorkspaces) {
+    process.stderr.write("Error: Cannot combine --workspace with --all-workspaces\n\n");
     process.stderr.write(renderHelp() + "\n");
     process.exit(3);
     return;
@@ -67,6 +81,7 @@ function parsePackArgs(argv: string[]): ParsedPackArgs {
   const args: PackCliArgs = {
     entries: [],
     symbols: [],
+    folders: [],
   };
   let help = false;
   const takeValue = (index: number, flag: string): string => {
@@ -164,6 +179,21 @@ function parsePackArgs(argv: string[]): ParsedPackArgs {
       case "--debug-cache":  // NEW: Debug cache format
         args.debugCache = true;
         break;
+      // NEW: Folder packing options
+      case "--folder":
+        args.folders!.push(inlineValue ?? takeValue(i, flag));
+        if (!inlineValue) i += 1;
+        break;
+      case "--folder-max-size":
+        args.folderMaxSizeMB = parseNumber(inlineValue ?? takeValue(i, flag), flag);
+        if (!inlineValue) i += 1;
+        break;
+      case "--folder-include-hidden":
+        args.folderIncludeHidden = true;
+        break;
+      case "--folder-follow-symlinks":
+        args.folderFollowSymlinks = true;
+        break;
       case "--no-timestamp":
         args.noTimestamp = true;
         break;
@@ -218,6 +248,12 @@ Debug options:
   --debug                 Enable verbose logging
   --debug-cache           Use JSON cache format (human readable)
   --help, -h              Show this help message
+
+Folder options:
+  --folder <path>         Pack all files in directory (repeatable)
+  --folder-max-size <mb>  Max file size in MB (default: 5)
+  --folder-include-hidden Include hidden files (default: skip)
+  --folder-follow-symlinks Follow symlinks (default: skip)
 
 Exit codes:
   0 success

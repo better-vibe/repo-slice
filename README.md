@@ -120,6 +120,37 @@ Extract a context bundle from the repository.
 | `--redact` | Redact secrets (API keys, etc.) |
 | `--no-timestamp` | Omit timestamp for reproducible output |
 | `--debug` | Enable debug logging |
+| `--debug-cache` | Use JSON cache format for debugging |
+
+#### Folder Packing Options
+
+Pack entire directories without import parsing:
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--folder <path>` | Pack all files in directory (repeatable) | - |
+| `--folder-max-size <mb>` | Max file size in MB | `5` |
+| `--folder-include-hidden` | Include hidden files (.*) | skip |
+| `--folder-follow-symlinks` | Follow symbolic links | skip |
+
+**Folder Packing Behavior:**
+- All files are included as-is (no import graph traversal)
+- Binary files include metadata only (path, size, MIME type)
+- Files exceeding `--folder-max-size` are listed in omitted section with reason
+- Respects `.gitignore` patterns
+- Empty directories are explicitly tracked in output
+
+**Example:**
+```bash
+# Pack documentation folder
+repo-slice pack --folder docs/
+
+# Pack assets with 10MB limit and include hidden files
+repo-slice pack --folder assets/ --folder-max-size 10 --folder-include-hidden
+
+# Mix entry file with folder
+repo-slice pack --entry src/app.ts --folder public/
+```
 
 ### `repo-slice workspaces [options]`
 

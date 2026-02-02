@@ -200,9 +200,10 @@ function buildImportGraph(
     const targets = graph.get(filePath)!;
 
     // Collect all module specifiers from both static and dynamic imports
-    const moduleSpecifiers = collectModuleSpecifiers(sourceFile);
+    const { staticImports, dynamicImports } = collectModuleSpecifiers(sourceFile);
 
-    for (const moduleSpecifier of moduleSpecifiers) {
+    // Process static imports
+    for (const moduleSpecifier of staticImports) {
       // Skip non-relative imports (node_modules)
       if (!moduleSpecifier.startsWith(".") && !moduleSpecifier.startsWith("/")) {
         continue;
@@ -222,6 +223,28 @@ function buildImportGraph(
         }
       }
     }
+
+    // Process dynamic imports
+    for (const moduleSpecifier of dynamicImports) {
+      // Skip non-relative imports (node_modules)
+      if (!moduleSpecifier.startsWith(".") && !moduleSpecifier.startsWith("/")) {
+        continue;
+      }
+
+      const resolved = ts.resolveModuleName(
+        moduleSpecifier,
+        filePath,
+        compilerOptions,
+        host
+      );
+
+      if (resolved.resolvedModule) {
+        const resolvedPath = normalizePath(resolved.resolvedModule.resolvedFileName);
+        if (isPathInside(resolvedPath, workspaceRoot)) {
+          targets.set(resolvedPath, "imports-dynamic");
+        }
+      }
+    }
   }
 
   return graph;
@@ -234,15 +257,25 @@ function buildImportGraph(
  * - Static exports: export { x } from "./module"
  * - Dynamic imports: import("./module") or await import("./module")
  */
-function collectModuleSpecifiers(sourceFile: ts.SourceFile): string[] {
-  const specifiers: string[] = [];
-  const seen = new Set<string>();
+function collectModuleSpecifiers(sourceFile: ts.SourceFile): { staticImports: string[]; dynamicImports: string[] } {
+  const staticImports: string[] = [];
+  const dynamicImports: string[] = [];
+  const staticSeen = new Set<string>();
+  const dynamicSeen = new Set<string>();
 
-  // Helper to add unique specifiers
-  const addSpecifier = (text: string) => {
-    if (!seen.has(text)) {
-      seen.add(text);
-      specifiers.push(text);
+  // Helper to add unique specifiers to static imports
+  const addStaticSpecifier = (text: string) => {
+    if (!staticSeen.has(text)) {
+      staticSeen.add(text);
+      staticImports.push(text);
+    }
+  };
+
+  // Helper to add unique specifiers to dynamic imports
+  const addDynamicSpecifier = (text: string) => {
+    if (!dynamicSeen.has(text)) {
+      dynamicSeen.add(text);
+      dynamicImports.push(text);
     }
   };
 
@@ -261,7 +294,7 @@ function collectModuleSpecifiers(sourceFile: ts.SourceFile): string[] {
     }
 
     if (specifier) {
-      addSpecifier(specifier);
+      addStaticSpecifier(specifier);
     }
   }
 
@@ -271,7 +304,7 @@ function collectModuleSpecifiers(sourceFile: ts.SourceFile): string[] {
     if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
       const [arg] = node.arguments;
       if (arg && ts.isStringLiteral(arg)) {
-        addSpecifier(arg.text);
+        addDynamicSpecifier(arg.text);
       }
     }
 
@@ -280,7 +313,7 @@ function collectModuleSpecifiers(sourceFile: ts.SourceFile): string[] {
 
   ts.forEachChild(sourceFile, visit);
 
-  return specifiers;
+  return { staticImports, dynamicImports };
 }
 
 function findTsDefinitions(
@@ -371,15 +404,22 @@ async function findTsReferences(
   options?: { limit?: number; anchorFiles?: string[] }
 ): Promise<SymbolLocation[]> {
   const fileName = definition.filePath;
-  const refs = languageService.getReferencesAtPosition(
-    fileName,
-    getPositionFromLine(fileName, definition.range.startLine)
-  );
+  const position = getPositionFromLine(fileName, definition.range.startLine);
+  
+  const refs = languageService.getReferencesAtPosition(fileName, position);
 
   if (!refs) return [];
 
   const results: SymbolLocation[] = [];
   const anchorSet = new Set(options?.anchorFiles?.map((f) => normalizePath(f)) ?? []);
+
+  // OPTIMIZATION: Get the program once outside the loop
+  const program = languageService.getProgram();
+  if (!program) return [];
+  
+  // Get the workspace root from the definition file path
+  // This assumes all files in the workspace are under the definition's directory tree
+  const workspaceRoot = fileName.substring(0, fileName.indexOf('/src/') + 1) || fileName.substring(0, fileName.lastIndexOf('/') + 1);
 
   for (const ref of refs) {
     const refFile = normalizePath(ref.fileName);
@@ -387,7 +427,11 @@ async function findTsReferences(
     // Skip the definition itself
     if (refFile === fileName && (ref as any).isDefinition) continue;
 
-    const sourceFile = languageService.getProgram()?.getSourceFile(refFile);
+    // OPTIMIZATION: Skip references outside the workspace (e.g., node_modules)
+    // This prevents trying to load files that weren't in the original program
+    if (!refFile.startsWith(workspaceRoot)) continue;
+
+    const sourceFile = program.getSourceFile(refFile);
     if (!sourceFile) continue;
 
     const range = createSpanRange(sourceFile, ref.textSpan);

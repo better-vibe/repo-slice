@@ -10,6 +10,15 @@ Reference for `repo-slice pack` and `repo-slice graph` command options.
 | `--symbol <query>` | Add symbol query as anchor (repeatable) |
 | `--from-diff <revRange>` | Add changed files + hunks as anchors |
 | `--from-log <path>` | Parse logs into file/line anchors |
+| `--folder <path>` | Pack all files in directory (repeatable, no import parsing) |
+
+### Folder Packing Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--folder-max-size <mb>` | `5` | Maximum file size in MB (files exceeding this are omitted with reason) |
+| `--folder-include-hidden` | - | Include hidden files (.*) in folder packing |
+| `--folder-follow-symlinks` | - | Follow symbolic links when scanning folders |
 
 ## Workspace Scope Options
 

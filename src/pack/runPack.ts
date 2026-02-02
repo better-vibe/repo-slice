@@ -44,6 +44,8 @@ import {
   setDebugCacheMode,
 } from "../cache/index.js";
 import type { WorkspaceCache } from "../cache/types.js";
+import { discoverFolderFiles } from "../folders/discover.js";
+import type { Language } from "../adapters/types.js";
 import { sha1 } from "../utils/hash.js";
 
 export async function runPack(args: PackCliArgs): Promise<void> {
@@ -206,6 +208,78 @@ export async function runPack(args: PackCliArgs): Promise<void> {
     ? selection.items
     : selection.items.map((item) => ({ ...item, reasons: [] }));
   const outputOmitted = includeReasons ? selection.omitted : [];
+
+  // Process folder files if --folder is specified
+  if (args.folders && args.folders.length > 0) {
+    const folderMaxSizeMB = args.folderMaxSizeMB ?? 5; // Default 5MB
+    const maxSizeBytes = folderMaxSizeMB * 1024 * 1024;
+    const includeHidden = args.folderIncludeHidden ?? false;
+    const followSymlinks = args.folderFollowSymlinks ?? false;
+
+    // Create a simple ignore matcher for folder discovery
+    const folderIgnoreMatcher = await createIgnoreMatcher({
+      repoRoot,
+      workspaceRoot: repoRoot,
+      extraIgnorePatterns: [],
+    });
+
+    for (const folderPath of args.folders) {
+      const folderResult = await discoverFolderFiles({
+        folderPath,
+        cwd,
+        maxSizeBytes,
+        ignoreMatcher: folderIgnoreMatcher,
+        includeHidden,
+        followSymlinks,
+      });
+
+      // Convert included files to BundleItem format
+      for (const file of folderResult.included) {
+        if (file.kind === "text" && file.content !== undefined) {
+          outputItems.push({
+            kind: "file",
+            lang: detectLanguage(file.path),
+            workspaceRoot: repoRoot,
+            filePath: file.path,
+            reasons: includeReasons ? ["folder inclusion"] : [],
+            content: file.content,
+          });
+        } else if (file.kind === "binary") {
+          outputItems.push({
+            kind: "file",
+            lang: "ts",
+            workspaceRoot: repoRoot,
+            filePath: file.path,
+            reasons: includeReasons ? ["folder inclusion (binary metadata only)"] : [],
+            content: `[Binary file: ${file.mimeType || "unknown"}, ${file.size} bytes]`,
+          });
+        } else if (file.kind === "directory" && file.isEmpty) {
+          outputItems.push({
+            kind: "file",
+            lang: "ts",
+            workspaceRoot: repoRoot,
+            filePath: file.path,
+            reasons: includeReasons ? ["folder inclusion (empty directory)"] : [],
+            content: "[Empty directory]",
+          });
+        }
+      }
+
+      // Convert skipped files to OmittedItem format
+      for (const skipped of folderResult.skipped) {
+        if (skipped.reason === "too-large") {
+          outputOmitted.push({
+            id: `folder:${skipped.path}`,
+            filePath: skipped.path,
+            kind: "file",
+            reason: `file exceeds max size (${skipped.size} bytes > ${skipped.maxSize} bytes)`,
+            score: 0,
+            estimatedChars: skipped.size,
+          });
+        }
+      }
+    }
+  }
 
   if (redactEnabled) {
     for (const item of outputItems) {
@@ -536,4 +610,16 @@ function buildWorkspaceCache(options: {
         }
       : undefined,
   };
+}
+
+/**
+ * Detect language from file path based on extension
+ */
+function detectLanguage(filePath: string): Language {
+  const ext = filePath.toLowerCase().split(".").pop() || "";
+  if (ext === "py") {
+    return "py";
+  }
+  // Default to "ts" for all other file types (including .txt, .md, .json, etc.)
+  return "ts";
 }
